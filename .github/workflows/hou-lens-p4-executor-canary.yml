@@ -7,6 +7,12 @@ on:
     paths:
       - .github/workflows/hou-lens-p4-executor-canary.yml
       - .hou-lens-p4-canary-trigger
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/hou-lens-p4-executor-canary.yml
+      - .hou-lens-p4-canary-trigger
   workflow_dispatch:
 
 permissions:
