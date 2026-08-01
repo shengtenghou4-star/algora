@@ -1,0 +1,51 @@
+{
+  "chunk_count": 8,
+  "chunks": [
+    {
+      "bytes": 3000,
+      "name": "chunk-000.b64",
+      "sha256": "25ad92199b34d4065726cebc985583bc825527f94f7a3c766395a8ec2054ea29"
+    },
+    {
+      "bytes": 3000,
+      "name": "chunk-001.b64",
+      "sha256": "6338970843e6890cb7de0a3f0a93c322177f998d258145ed9ef53019debe708c"
+    },
+    {
+      "bytes": 3000,
+      "name": "chunk-002.b64",
+      "sha256": "88722aafddde59f4eeea6cbfaee8628f0b1072ac286e5f75cc4e21737a33c2c7"
+    },
+    {
+      "bytes": 3000,
+      "name": "chunk-003.b64",
+      "sha256": "341455a1bc0fe22df1636629edc6df1c2a3bfd03a1cc1882e3091f5827861b3c"
+    },
+    {
+      "bytes": 3000,
+      "name": "chunk-004.b64",
+      "sha256": "8618df0afcb4181c7779bc593aaf472716283c445d5f4a3c097d0ef57e2d7446"
+    },
+    {
+      "bytes": 3000,
+      "name": "chunk-005.b64",
+      "sha256": "9f02017a60211d32c26e92911c957ef9447974dbd414ba6e7cc0cb40b1dc95aa"
+    },
+    {
+      "bytes": 3000,
+      "name": "chunk-006.b64",
+      "sha256": "3abbafa51dc76b8ec2b54a16cb8192ce058ebfd990f6b0df576ab17d444287c5"
+    },
+    {
+      "bytes": 2352,
+      "name": "chunk-007.b64",
+      "sha256": "e5be3a0e2b36c180c36d22a6d85604c15dc23aaa31beec5a22205461b09af0c1"
+    }
+  ],
+  "payload_b64_bytes": 23352,
+  "payload_b64_sha256": "1188d34c7ed14e2f77219fedcff5b28b05b683c7d113bf8910e78566a2b6fae1",
+  "payload_cms_bytes": 17512,
+  "payload_cms_sha256": "be549c454276bbe9fd6c9a00f8d6649dee7ff30d6cabcc422c94230f70760015",
+  "run_id": "30709942955",
+  "schema_version": 1
+}
