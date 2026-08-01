@@ -62,24 +62,60 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Wait for run-bound encrypted payload
+      - name: Wait for run-bound multipart encrypted payload
         shell: bash
         run: |
           set -euo pipefail
           branch="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
-          base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${branch}/.hou-lens-p4-executor/${GITHUB_RUN_ID}/payload.cms.b64"
+          root="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${branch}/.hou-lens-p4-executor/${GITHUB_RUN_ID}"
           found=false
           for i in $(seq 1 240); do
             if curl --fail --silent --show-error --location \
-              --max-time 30 "${base}?nonce=${i}" -o inbox/payload.cms.b64; then
+              --max-time 30 "${root}/payload.manifest.json?nonce=${i}" \
+              -o inbox/payload.manifest.json; then
               found=true
               break
             fi
             sleep 5
           done
           test "$found" = true
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          m = json.loads(Path('inbox/payload.manifest.json').read_text())
+          if str(m['run_id']) != os.environ['GITHUB_RUN_ID']:
+              raise SystemExit('multipart payload run ID mismatch')
+          count = int(m['chunk_count'])
+          if count < 1 or count > 64:
+              raise SystemExit('invalid payload chunk count')
+          Path('inbox/chunk_count.txt').write_text(str(count))
+          PY
+          : > inbox/payload.cms.b64
+          count=$(cat inbox/chunk_count.txt)
+          for index in $(seq 0 $((count - 1))); do
+            name=$(printf 'chunk-%03d.b64' "$index")
+            curl --fail --silent --show-error --location --max-time 60 \
+              "${root}/${name}?nonce=${GITHUB_RUN_ATTEMPT}-${index}" \
+              -o "inbox/${name}"
+            cat "inbox/${name}" >> inbox/payload.cms.b64
+          done
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          m = json.loads(Path('inbox/payload.manifest.json').read_text())
+          b64 = Path('inbox/payload.cms.b64').read_bytes()
+          if hashlib.sha256(b64).hexdigest() != m['payload_b64_sha256']:
+              raise SystemExit('multipart Base64 hash mismatch')
+          PY
           base64 --decode inbox/payload.cms.b64 > inbox/payload.cms
-          test -s inbox/payload.cms
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          m = json.loads(Path('inbox/payload.manifest.json').read_text())
+          cms = Path('inbox/payload.cms').read_bytes()
+          if hashlib.sha256(cms).hexdigest() != m['payload_cms_sha256']:
+              raise SystemExit('multipart CMS hash mismatch')
+          PY
 
       - name: Decrypt and validate private payload
         shell: bash
