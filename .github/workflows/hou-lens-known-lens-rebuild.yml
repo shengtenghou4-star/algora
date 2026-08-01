@@ -1,0 +1,102 @@
+name: HOU-LENS public known-lens union rebuild
+
+on:
+  push:
+    branches: [hou-lens-p4-executor-canary]
+    paths:
+      - .github/workflows/hou-lens-known-lens-rebuild.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/hou-lens-known-lens-rebuild.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install dependencies
+        run: python -m pip install pandas requests
+
+      - name: Download, verify and normalize public catalogues
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/raw evidence/normalized
+          cat > evidence/rebuild.py <<'PY'
+          import hashlib, io, json
+          from pathlib import Path
+          import pandas as pd
+          import requests
+
+          OUT=Path('evidence')
+          SOURCES=[
+            dict(name='kids_high_quality_268',kind='csv',url='https://kids.strw.leidenuniv.nl/DR4/data_files/lens_catalog.csv',sha='28df67f6206648ce8ce352d5e9d8dcbcbe69285f9491e6364293755a0bff7c8e',rows=268,role='benchmark_and_exclusion',tier='high_quality_candidate',eligible=True,grade='HQ'),
+            dict(name='liu2026_obscured',kind='tap',table='J/A+A/710/A366/cand',sha='b21920086035095771ec06c0949e15dd83a34bbe18b043b742d2cd2c2ead4f59',rows=2168,role='benchmark_and_exclusion',tier='published_candidate',eligible=False,allow=['A'],grade=''),
+            dict(name='teglie2024_grade1',kind='tap',table='J/A+A/688/A34/tablea1',sha='3493f3e1d25361f2305c40a632f322665cf024ffe9ebfb58549bff92a8878e27',rows=71,role='benchmark_and_exclusion',tier='grade_a_candidate',eligible=True,grade='A'),
+            dict(name='teglie2024_grade2',kind='tap',table='J/A+A/688/A34/tablec1',sha='1fe3755f16f6f2a30b565e17becee300daff0fe554fcc71190cf86c0d6991f3e',rows=193,role='exclusion_and_secondary_sensitivity',tier='grade_b_candidate',eligible=False,grade='B'),
+          ]
+
+          def get(source):
+            if source['kind']=='csv':
+              r=requests.get(source['url'],timeout=180,headers={'User-Agent':'HOU-LENS-KiDS/0.2'})
+            else:
+              q=f'SELECT * FROM "{source["table"]}"'
+              r=requests.get('https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync',params={'REQUEST':'doQuery','LANG':'ADQL','FORMAT':'csv','QUERY':q},timeout=240,headers={'User-Agent':'HOU-LENS-KiDS/0.2'})
+            r.raise_for_status(); b=r.content
+            h=hashlib.sha256(b).hexdigest()
+            if h!=source['sha']: raise SystemExit(f'raw SHA mismatch {source["name"]}: {h}')
+            (OUT/'raw'/f'{source["name"]}.csv').write_bytes(b)
+            return pd.read_csv(io.StringIO(b.decode('utf-8-sig'))), {'url':r.url,'status_code':r.status_code,'byte_size':len(b),'sha256':h}
+
+          def col(frame,names,optional=False):
+            lookup={str(x).lower():str(x) for x in frame.columns}
+            for n in names:
+              if n.lower() in lookup:return lookup[n.lower()]
+            if optional:return None
+            raise ValueError((names,list(frame.columns)))
+
+          def normalize(frame,s):
+            ra=col(frame,['RAJ2000','RAdeg','RA','ra','RA_ICRS'])
+            de=col(frame,['DECJ2000','DEJ2000','DEdeg','DEC','dec','DE_ICRS'])
+            ident=col(frame,['KIDS_ID','ID','Name','name','Lens','Source','recno'],True)
+            gradecol=col(frame,['Grade','grade','Class','class','Q'],True)
+            grade=frame[gradecol].astype(str).str.strip() if gradecol else pd.Series([s['grade']]*len(frame),index=frame.index,dtype=str)
+            grade=grade.replace({'nan':'','None':''}).str.upper()
+            eligible=pd.Series([bool(s['eligible'])]*len(frame),index=frame.index,dtype=bool)
+            if s.get('allow'): eligible=grade.isin({x.upper() for x in s['allow']})
+            tier=pd.Series([s['tier']]*len(frame),index=frame.index,dtype=str)
+            tier.loc[grade.eq('A')]='grade_a_candidate';tier.loc[grade.eq('B')]='grade_b_candidate';tier.loc[grade.eq('C')]='grade_c_candidate'
+            out=pd.DataFrame({'source_catalog':s['name'],'source_id':frame[ident].astype(str) if ident else [f'{s["name"]}_{i}' for i in range(len(frame))],'ra_deg':pd.to_numeric(frame[ra],errors='coerce'),'dec_deg':pd.to_numeric(frame[de],errors='coerce'),'grade':grade,'confirmation_status':'candidate','benchmark_tier':tier,'benchmark_eligible':eligible,'source_role':s['role']})
+            out=out.dropna(subset=['ra_deg','dec_deg']).copy()
+            out=out.drop_duplicates(['source_catalog','source_id','ra_deg','dec_deg']).reset_index(drop=True)
+            if len(out)!=s['rows']: raise SystemExit(f'normalized row mismatch {s["name"]}: {len(out)}')
+            return out
+
+          frames=[];receipts={}
+          for s in SOURCES:
+            raw,rec=get(s); norm=normalize(raw,s)
+            norm.to_csv(OUT/'normalized'/f'{s["name"]}.csv',index=False)
+            frames.append(norm);receipts[s['name']]={**rec,'normalized_rows':len(norm),'benchmark_eligible_rows':int(norm['benchmark_eligible'].sum()),'confirmation_status_counts':norm['confirmation_status'].value_counts().to_dict(),'benchmark_tier_counts':norm['benchmark_tier'].value_counts().to_dict()}
+          union=pd.concat(frames,ignore_index=True)
+          path=OUT/'kids_known_lenses_union.csv';union.to_csv(path,index=False)
+          data=path.read_bytes();git_blob=hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
+          receipt={'schema_version':1,'rows':len(union),'sha256':hashlib.sha256(data).hexdigest(),'git_blob':git_blob,'expected_git_blob':'d02296b8101e50fdae1931598359f4c2a68dc0fb','exact_git_blob_match':git_blob=='d02296b8101e50fdae1931598359f4c2a68dc0fb','sources':receipts}
+          (OUT/'rebuild_receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          if not receipt['exact_git_blob_match']: raise SystemExit(f'union Git blob mismatch: {git_blob}')
+          print(json.dumps(receipt,indent=2))
+          PY
+          python evidence/rebuild.py
+
+      - name: Upload exact public catalogue reconstruction
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-known-lens-rebuild-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 3
