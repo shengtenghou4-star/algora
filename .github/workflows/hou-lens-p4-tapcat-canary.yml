@@ -19,27 +19,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Query generic tap_cat schema row by supported text format
+      - name: Query generic tap_cat schema row by supported JSON format
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           status=$(curl --location --silent --show-error \
             --max-time 90 \
-            --output evidence/response.txt \
+            --output evidence/response.json \
             --write-out '%{http_code}' \
             --data-urlencode 'REQUEST=doQuery' \
             --data-urlencode 'LANG=ADQL' \
-            --data-urlencode 'FORMAT=text' \
+            --data-urlencode 'FORMAT=json' \
             --data-urlencode 'MAXREC=1' \
             --data-urlencode 'QUERY=SELECT TOP 1 table_name FROM TAP_SCHEMA.tables' \
             'https://archive.eso.org/tap_cat/sync')
           printf '%s\n' "$status" > evidence/http_status.txt
-          sha256sum evidence/response.txt > evidence/response.sha256
-          wc -c evidence/response.txt > evidence/response.bytes
-          file evidence/response.txt > evidence/file_type.txt
+          sha256sum evidence/response.json > evidence/response.sha256
+          wc -c evidence/response.json > evidence/response.bytes
+          file evidence/response.json > evidence/file_type.txt
           test "$status" = '200'
-          grep -qi 'table_name' evidence/response.txt
+          python -m json.tool evidence/response.json > evidence/response.pretty.json
 
       - name: Upload generic canary evidence
         if: always()
