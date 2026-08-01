@@ -1,0 +1,51 @@
+name: HOU-LENS tap_cat POST canary
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/hou-lens-p4-tapcat-canary.yml
+  push:
+    branches: [hou-lens-p4-executor-canary]
+    paths:
+      - .github/workflows/hou-lens-p4-tapcat-canary.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tapcat-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Query generic tap_cat schema row by POST
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          status=$(curl --location --silent --show-error \
+            --max-time 90 \
+            --output evidence/response.csv \
+            --write-out '%{http_code}' \
+            --data-urlencode 'REQUEST=doQuery' \
+            --data-urlencode 'LANG=ADQL' \
+            --data-urlencode 'FORMAT=csv' \
+            --data-urlencode 'MAXREC=1' \
+            --data-urlencode 'QUERY=SELECT TOP 1 table_name FROM TAP_SCHEMA.tables' \
+            'https://archive.eso.org/tap_cat/sync')
+          printf '%s\n' "$status" > evidence/http_status.txt
+          sha256sum evidence/response.csv > evidence/response.sha256
+          wc -c evidence/response.csv > evidence/response.bytes
+          file evidence/response.csv > evidence/file_type.txt
+          test "$status" = '200'
+          grep -qi 'table_name' evidence/response.csv
+
+      - name: Upload generic canary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-tapcat-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 2
