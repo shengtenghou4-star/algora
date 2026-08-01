@@ -94,9 +94,17 @@ jobs:
           count=$(cat inbox/chunk_count.txt)
           for index in $(seq 0 $((count - 1))); do
             name=$(printf 'chunk-%03d.b64' "$index")
-            curl --fail --silent --show-error --location --max-time 60 \
-              "${root}/${name}?nonce=${GITHUB_RUN_ATTEMPT}-${index}" \
-              -o "inbox/${name}"
+            chunk_found=false
+            for retry in $(seq 1 180); do
+              if curl --fail --silent --show-error --location --max-time 30 \
+                "${root}/${name}?nonce=${GITHUB_RUN_ATTEMPT}-${index}-${retry}" \
+                -o "inbox/${name}"; then
+                chunk_found=true
+                break
+              fi
+              sleep 2
+            done
+            test "$chunk_found" = true
             cat "inbox/${name}" >> inbox/payload.cms.b64
           done
           python - <<'PY'
@@ -162,7 +170,7 @@ jobs:
           exit 0
 
       - name: Encrypt private result package
-        if: always()
+        if: always() && hashFiles('private/payload/result-recipient-cert.pem') != ''
         shell: bash
         env:
           RUNNER_RC: ${{ steps.execute.outputs.runner_rc }}
@@ -222,6 +230,33 @@ jobs:
           }
           Path('public/envelope_receipt.json').write_text(
               json.dumps(envelope, indent=2, sort_keys=True) + '\n'
+          )
+          PY
+
+      - name: Write public pre-payload failure receipt
+        if: always() && hashFiles('private/payload/result-recipient-cert.pem') == ''
+        shell: bash
+        run: |
+          mkdir -p public
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('public/envelope_receipt.json').write_text(
+              json.dumps({
+                  'schema_version': 1,
+                  'stage': 'hou_lens_p4_encrypted_result_envelope',
+                  'run_id': os.environ['GITHUB_RUN_ID'],
+                  'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                  'head_sha': os.environ['GITHUB_SHA'],
+                  'execution_status': 'PAYLOAD_NOT_ACCEPTED',
+                  'completed_groups': 0,
+                  'failed_groups': 48,
+                  'plaintext_result_uploaded': False,
+                  'images_downloaded': False,
+                  'scores_computed': False,
+                  'unknown_dr5_only_targets_queried': False,
+                  'blind_search_performed': False,
+              }, indent=2, sort_keys=True) + '\n'
           )
           PY
 
