@@ -1,0 +1,41 @@
+name: HOU-LENS isolated ESO executor canary
+
+on:
+  push:
+    branches:
+      - hou-lens-p4-executor-canary
+    paths:
+      - .github/workflows/hou-lens-p4-executor-canary.yml
+      - .hou-lens-p4-canary-trigger
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Query one public TAP_SCHEMA row
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          url='https://archive.eso.org/tap_obs/sync?REQUEST=doQuery&LANG=ADQL&MAXREC=1&FORMAT=csv&QUERY=SELECT%20TOP%201%20table_name%20FROM%20TAP_SCHEMA.tables'
+          status=$(curl --location --silent --show-error --output evidence/response.csv --write-out '%{http_code}' --max-time 90 "$url")
+          printf '%s\n' "$status" > evidence/http_status.txt
+          file evidence/response.csv > evidence/file_type.txt
+          sha256sum evidence/response.csv > evidence/response.sha256
+          wc -c evidence/response.csv > evidence/response.bytes
+          test "$status" = '200'
+          grep -qi 'table_name' evidence/response.csv
+
+      - name: Upload canary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-eso-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 3
