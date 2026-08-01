@@ -1,4 +1,4 @@
-name: HOU-LENS isolated ESO executor canary
+name: HOU-LENS isolated encrypted ESO executor
 
 on:
   push:
@@ -19,29 +19,189 @@ permissions:
   contents: read
 
 jobs:
-  canary:
+  encrypted-executor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
-      - name: Query one public TAP_SCHEMA row
+      - name: Generate ephemeral executor certificate
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p evidence
-          url='https://archive.eso.org/tap_obs/sync?REQUEST=doQuery&LANG=ADQL&MAXREC=1&FORMAT=csv&QUERY=SELECT%20TOP%201%20table_name%20FROM%20TAP_SCHEMA.tables'
-          status=$(curl --location --silent --show-error --output evidence/response.csv --write-out '%{http_code}' --max-time 90 "$url")
-          printf '%s\n' "$status" > evidence/http_status.txt
-          file evidence/response.csv > evidence/file_type.txt
-          sha256sum evidence/response.csv > evidence/response.sha256
-          wc -c evidence/response.csv > evidence/response.bytes
-          test "$status" = '200'
-          grep -qi 'table_name' evidence/response.csv
+          umask 077
+          mkdir -p private handshake inbox public
+          openssl req -x509 -newkey rsa:3072 -nodes \
+            -keyout private/executor-key.pem \
+            -out handshake/executor-cert.pem \
+            -days 1 \
+            -subj "/CN=hou-lens-p4-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            >/dev/null 2>&1
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          cert = Path('handshake/executor-cert.pem').read_bytes()
+          receipt = {
+              'schema_version': 1,
+              'stage': 'hou_lens_p4_ephemeral_executor_handshake',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'head_sha': os.environ['GITHUB_SHA'],
+              'executor_cert_sha256': hashlib.sha256(cert).hexdigest(),
+              'private_key_exported': False,
+              'contains_p4_identity': False,
+          }
+          Path('handshake/handshake_receipt.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n'
+          )
+          PY
 
-      - name: Upload canary evidence
+      - name: Upload ephemeral public certificate
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-handshake-${{ github.run_id }}-${{ github.run_attempt }}
+          path: handshake
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Wait for run-bound encrypted payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${branch}/.hou-lens-p4-executor/${GITHUB_RUN_ID}/payload.cms.b64"
+          found=false
+          for i in $(seq 1 240); do
+            if curl --fail --silent --show-error --location \
+              --max-time 30 "${base}?nonce=${i}" -o inbox/payload.cms.b64; then
+              found=true
+              break
+            fi
+            sleep 5
+          done
+          test "$found" = true
+          base64 --decode inbox/payload.cms.b64 > inbox/payload.cms
+          test -s inbox/payload.cms
+
+      - name: Decrypt and validate private payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl cms -decrypt -binary -inform DER \
+            -in inbox/payload.cms \
+            -recip handshake/executor-cert.pem \
+            -inkey private/executor-key.pem \
+            -out private/payload.tar.gz
+          mkdir -p private/payload
+          tar -xzf private/payload.tar.gz -C private/payload
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          manifest = json.loads(Path('private/payload/payload_manifest.json').read_text())
+          if str(manifest['run_id']) != os.environ['GITHUB_RUN_ID']:
+              raise SystemExit('payload run ID mismatch')
+          expected = {
+              'source_bound_plan.json': '03d225498c0705f1cf4f4ab63fe3672a5309d777ed53d73c089a20c9a3c34cb1',
+              'runner.py': manifest['runner_sha256'],
+              'result-recipient-cert.pem': manifest['result_recipient_cert_sha256'],
+          }
+          for name, wanted in expected.items():
+              data = Path('private/payload', name).read_bytes()
+              if hashlib.sha256(data).hexdigest() != wanted:
+                  raise SystemExit(f'payload hash mismatch: {name}')
+          if manifest.get('contains_images') or manifest.get('contains_scores'):
+              raise SystemExit('forbidden payload content')
+          PY
+
+      - name: Execute 48 encrypted catalogue queries
+        id: execute
+        shell: bash
+        run: |
+          set +e
+          python private/payload/runner.py \
+            --plan private/payload/source_bound_plan.json \
+            --output-dir private/results \
+            --timeout 240 \
+            --attempts 3
+          rc=$?
+          echo "runner_rc=${rc}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Encrypt private result package
+        if: always()
+        shell: bash
+        env:
+          RUNNER_RC: ${{ steps.execute.outputs.runner_rc }}
+        run: |
+          set -euo pipefail
+          mkdir -p private/results public
+          if [ ! -f private/results/execution_receipt_public.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          Path('private/results/execution_receipt_public.json').write_text(
+              json.dumps({
+                  'schema_version': 1,
+                  'stage': 'p4_encrypted_public_runner_public_receipt',
+                  'status': 'EXECUTOR_FAILED_BEFORE_RECEIPT',
+                  'planned_groups': 48,
+                  'completed_groups': 0,
+                  'failed_groups': 48,
+                  'images_downloaded': False,
+                  'scores_computed': False,
+                  'unknown_dr5_only_targets_queried': False,
+                  'blind_search_performed': False,
+              }, indent=2, sort_keys=True) + '\n'
+          )
+          PY
+          fi
+          cp private/results/execution_receipt_public.json public/execution_receipt_public.json
+          tar --sort=name --mtime='UTC 2026-08-01' --owner=0 --group=0 --numeric-owner \
+            -czf private/results.tar.gz -C private results
+          openssl cms -encrypt -binary -aes256 \
+            -in private/results.tar.gz \
+            -out public/result.cms \
+            -outform DER \
+            private/payload/result-recipient-cert.pem
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          encrypted = Path('public/result.cms').read_bytes()
+          public_receipt = json.loads(Path('public/execution_receipt_public.json').read_text())
+          envelope = {
+              'schema_version': 1,
+              'stage': 'hou_lens_p4_encrypted_result_envelope',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'head_sha': os.environ['GITHUB_SHA'],
+              'runner_rc': int(os.environ.get('RUNNER_RC') or -1),
+              'execution_status': public_receipt.get('status'),
+              'completed_groups': public_receipt.get('completed_groups', 0),
+              'failed_groups': public_receipt.get('failed_groups', 48),
+              'encrypted_result_bytes': len(encrypted),
+              'encrypted_result_sha256': hashlib.sha256(encrypted).hexdigest(),
+              'plaintext_result_uploaded': False,
+              'images_downloaded': False,
+              'scores_computed': False,
+              'unknown_dr5_only_targets_queried': False,
+              'blind_search_performed': False,
+          }
+          Path('public/envelope_receipt.json').write_text(
+              json.dumps(envelope, indent=2, sort_keys=True) + '\n'
+          )
+          PY
+
+      - name: Upload encrypted execution result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hou-lens-p4-eso-canary-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence
+          name: hou-lens-p4-encrypted-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: public
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 2
+
+      - name: Enforce complete execution
+        if: always()
+        shell: bash
+        env:
+          RUNNER_RC: ${{ steps.execute.outputs.runner_rc }}
+        run: |
+          test "${RUNNER_RC:-99}" = '0'
