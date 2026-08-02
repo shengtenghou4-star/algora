@@ -1,0 +1,8 @@
+P4.1 one-use image acquisition handshake only
+lock_file_sha256=8a00c6681cebdd190da667711b7479d22ffcd175e677b0c740037eeab6976f1a
+executor_git_blob=26f9a7ed5529a98911a5d948e365eae611a0af8b
+planned_soda_requests=940
+consumption_receipt_required_before_payload=true
+scorer_available=false
+scores_computed=false
+unknown_targets=false
