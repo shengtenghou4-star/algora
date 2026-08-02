@@ -1,0 +1,59 @@
+name: HOU-LENS public KiDS product-shape canary
+
+on:
+  push:
+    branches: [hou-lens-p4-executor-canary]
+    paths:
+      - .github/workflows/hou-lens-public-product-shape.yml
+      - .github/hou-lens-product-shape-trigger
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Query one previously public canary tile
+        run: |
+          python - <<'PY'
+          import csv, hashlib, json, urllib.parse, urllib.request
+          from pathlib import Path
+          query = """SELECT TOP 100
+            obs_publisher_did, obs_id, target_name, dataproduct_type,
+            access_url, access_format, calib_level, s_ra, s_dec,
+            em_min, em_max, t_min, t_max, filter
+          FROM ivoa.ObsCore
+          WHERE target_name='KIDS_0.0_-31.2'
+          ORDER BY filter, t_min, obs_publisher_did
+          """
+          params = urllib.parse.urlencode({
+              'REQUEST':'doQuery','LANG':'ADQL','FORMAT':'json','QUERY':query
+          }).encode()
+          req = urllib.request.Request('https://archive.eso.org/tap_obs/sync', data=params,
+              headers={'User-Agent':'HOU-LENS-public-product-shape/1.0'})
+          with urllib.request.urlopen(req, timeout=180) as resp:
+              raw = resp.read()
+          payload = json.loads(raw)
+          names = [str(x.get('name')) for x in payload['metadata']]
+          rows = payload['data']
+          out = Path('out'); out.mkdir()
+          (out/'raw.json').write_bytes(raw)
+          with (out/'products.csv').open('w', newline='', encoding='utf-8') as f:
+              w=csv.writer(f, lineterminator='\n'); w.writerow(names); w.writerows(rows)
+          receipt={'rows':len(rows),'columns':names,'raw_sha256':hashlib.sha256(raw).hexdigest(),
+                   'query_sha256':hashlib.sha256(query.encode()).hexdigest(),
+                   'public_canary_tile':'KIDS_0.0_-31.2'}
+          (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-public-product-shape-${{ github.run_id }}
+          path: out
+          retention-days: 3
