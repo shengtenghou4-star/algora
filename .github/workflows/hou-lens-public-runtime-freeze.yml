@@ -1,0 +1,72 @@
+name: HOU-LENS public P4.1 acquisition runtime freeze
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/hou-lens-public-runtime-freeze.yml
+      - .github/hou-lens-runtime-start
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Freeze container and offline wheels
+        run: |
+          set -euo pipefail
+          IMAGE='python:3.11.13-slim-bookworm'
+          mkdir -p runtime/wheels
+          cat > runtime/requirements.in <<'REQ'
+          numpy==1.26.4
+          scipy==1.11.4
+          astropy==6.0.1
+          pytest==8.2.2
+          REQ
+          docker pull "$IMAGE" >/dev/null
+          DIGEST=$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')
+          docker run --rm -v "$PWD/runtime:/work" "$IMAGE" sh -lc '
+            set -e
+            python -m pip download --disable-pip-version-check --only-binary=:all: --dest /work/wheels -r /work/requirements.in
+            python -m pip install --disable-pip-version-check --no-index --find-links /work/wheels -r /work/requirements.in >/dev/null
+            python -m pip freeze | grep -Ev "^(pip|setuptools|wheel)==" | LC_ALL=C sort > /work/requirements.freeze
+            python - <<PY
+          import json,platform,sys
+          json.dump({"python":sys.version,"implementation":platform.python_implementation(),"machine":platform.machine(),"platform":platform.platform()},open("/work/python.json","w"),indent=2)
+          PY
+          '
+          (cd runtime/wheels && sha256sum * | LC_ALL=C sort -k2 > ../wheel-manifest.sha256)
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf - -C runtime wheels | gzip -n > runtime/wheels.tar.gz
+          IMAGE_DIGEST="$DIGEST" python - <<'PY'
+          import hashlib,json,os,pathlib
+          root=pathlib.Path('runtime')
+          def sha(name): return hashlib.sha256((root/name).read_bytes()).hexdigest()
+          py=json.loads((root/'python.json').read_text())
+          receipt={
+            'schema_version':1,
+            'stage':'p4_1_acquisition_runtime_freeze',
+            'status':'PASS_REPRODUCIBLE_OFFLINE_RUNTIME',
+            'runner_label':'ubuntu-24.04',
+            'container_image':os.environ['IMAGE_DIGEST'],
+            'python':py,
+            'requirements_input_sha256':sha('requirements.in'),
+            'requirements_freeze_sha256':sha('requirements.freeze'),
+            'wheel_manifest_sha256':sha('wheel-manifest.sha256'),
+            'wheel_bundle_sha256':sha('wheels.tar.gz'),
+            'wheel_bundle_bytes':(root/'wheels.tar.gz').stat().st_size,
+            'network_required_for_dependency_installation':False,
+            'contains_project_identity_or_data':False,
+          }
+          (root/'runtime-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-1-runtime-${{ github.run_id }}
+          path: runtime
+          retention-days: 3
