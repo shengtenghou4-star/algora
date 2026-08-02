@@ -4,5 +4,6 @@ executor_git_blob=26f9a7ed5529a98911a5d948e365eae611a0af8b
 soda_requests_allowed=false
 image_bytes_downloaded=0
 scores_computed=false
-retry_utc=2026-08-02T09:15:00Z
+retry_utc=2026-08-02T09:33:00Z
 transport=fixed-directory-manifest-last
+finalizer_field_compatibility=true
