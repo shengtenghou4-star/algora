@@ -1,15 +1,16 @@
 {
-  "schema_version": 1,
-  "stage": "p4_1_final_executor_preflight_payload",
-  "run_id": "30738611154",
-  "part_count": 8,
-  "base64_sha256": "cd55ce5a5a1c9a0a2b768ef0212b591f21ef953bf299e896b6a5ef38ade5d5c3",
-  "cms_der_sha256": "b3e9cd0584a54fbfb0aac2348160cad8d16e75fb8b337b960d80d7b194442eae",
-  "payload_tar_sha256": "2ce40ec11dc7a4047bf3ba579fa38cb0df39f18b2cfc553fea04f5c5665e5af4",
-  "payload_tar_bytes": 65159,
-  "cms_der_bytes": 65736,
-  "plaintext_identity_published": false,
-  "soda_requests_allowed": false,
+  "base64_sha256": "a62c2ba98d222fff6fbe2c2a2ed86729f362f888a2c1bd8d4959ab0be325bfe9",
+  "cms_der_bytes": 17893,
+  "cms_der_sha256": "152a95fd407e2e12557424b8ed0756fb22778b2744b3c85c3c3f445488d1c498",
   "images_downloaded": false,
-  "scores_computed": false
+  "inherited_manifest_verification": true,
+  "part_count": 7,
+  "payload_tar_bytes": 17327,
+  "payload_tar_sha256": "610785323bdf3871234b15b3af484ce268230a28d133eee3f7f0ff2261038fe2",
+  "plaintext_identity_published": false,
+  "run_id": "30741413219",
+  "schema_version": 1,
+  "scores_computed": false,
+  "soda_requests_allowed": false,
+  "stage": "p4_1_final_executor_preflight_payload"
 }
