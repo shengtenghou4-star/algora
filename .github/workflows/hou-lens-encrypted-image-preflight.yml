@@ -1,0 +1,174 @@
+name: HOU-LENS encrypted P4.1 image preflight
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/hou-lens-encrypted-image-preflight.yml
+      - .github/hou-lens-preflight-start
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate ephemeral preflight certificate
+        run: |
+          set -euo pipefail
+          openssl req -x509 -newkey rsa:3072 -nodes -days 1 \
+            -subj '/CN=HOU-LENS-P4.1-ephemeral-preflight-runner' \
+            -keyout /tmp/runner.key -out runner.crt >/dev/null 2>&1
+          python - <<'PY'
+          import hashlib,json,os
+          raw=open('runner.crt','rb').read()
+          json.dump({
+            'schema_version':1,
+            'stage':'p4_1_ephemeral_preflight_handshake',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'head_sha':os.environ['GITHUB_SHA'],
+            'certificate_sha256':hashlib.sha256(raw).hexdigest(),
+            'private_key_published':False,
+            'soda_requests_allowed':False,
+          },open('handshake.json','w'),indent=2)
+          PY
+
+      - name: Upload handshake
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-1-preflight-handshake-${{ github.run_id }}
+          path: |
+            runner.crt
+            handshake.json
+          retention-days: 2
+
+      - name: Download frozen offline runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: hou-lens-p4-1-runtime-30734422166
+          path: /tmp/runtime
+          repository: shengtenghou4-star/algora
+          run-id: 30734422166
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for encrypted preflight payload
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/payload_parts /tmp/work /tmp/preflight
+          found=0
+          for attempt in $(seq 1 120); do
+            git fetch -q origin "$BRANCH"
+            if git show "origin/$BRANCH:.github/hou-lens-preflight-payload/manifest.json" >/tmp/manifest.json 2>/dev/null; then
+              count=$(python -c "import json; print(json.load(open('/tmp/manifest.json'))['part_count'])")
+              complete=1
+              : >/tmp/payload.b64
+              for idx in $(seq -f '%03g' 1 "$count"); do
+                if ! git show "origin/$BRANCH:.github/hou-lens-preflight-payload/part-${idx}.b64" >>/tmp/payload.b64 2>/dev/null; then
+                  complete=0
+                  break
+                fi
+              done
+              if [ "$complete" = 1 ]; then found=1; break; fi
+            fi
+            sleep 10
+          done
+          test "$found" = 1
+          python - <<'PY'
+          import base64,hashlib,json
+          m=json.load(open('/tmp/manifest.json'))
+          b64=open('/tmp/payload.b64','rb').read()
+          if hashlib.sha256(b64).hexdigest()!=m['base64_sha256']: raise SystemExit('base64 hash mismatch')
+          der=base64.b64decode(b64,validate=True)
+          if hashlib.sha256(der).hexdigest()!=m['cms_der_sha256']: raise SystemExit('CMS hash mismatch')
+          open('/tmp/payload.der','wb').write(der)
+          PY
+          openssl cms -decrypt -binary -inform DER -in /tmp/payload.der \
+            -recip runner.crt -inkey /tmp/runner.key -out /tmp/payload.tar.gz
+          python - <<'PY'
+          import hashlib,json
+          m=json.load(open('/tmp/manifest.json'))
+          raw=open('/tmp/payload.tar.gz','rb').read()
+          if hashlib.sha256(raw).hexdigest()!=m['payload_tar_sha256']: raise SystemExit('payload tar hash mismatch')
+          PY
+          tar -xzf /tmp/payload.tar.gz -C /tmp/work
+
+      - name: Verify lock, blobs, manifests and runtime
+        run: |
+          set -euo pipefail
+          python /tmp/work/verify_preflight_inputs.py \
+            --work /tmp/work --runtime /tmp/runtime --output /tmp/preflight/input-verification.json
+          IMAGE='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
+          docker pull "$IMAGE" >/dev/null
+          docker image inspect "$IMAGE" >/dev/null
+
+      - name: Run frozen tests offline with no network
+        run: |
+          set -euo pipefail
+          IMAGE='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
+          docker run --rm --network none \
+            -v /tmp/work:/work:ro \
+            -v /tmp/runtime:/runtime:ro \
+            -v /tmp/preflight:/output \
+            "$IMAGE" sh -lc '
+              set -euo pipefail
+              python -m pip install --disable-pip-version-check --no-index \
+                --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null
+              cd /work
+              PYTHONPATH=src pytest -q \
+                tests/test_p4_image_acquisition.py \
+                tests/test_p4_soda_manifest.py \
+                --junitxml=/output/junit.xml
+            '
+          python /tmp/work/finalize_preflight.py \
+            --verification /tmp/preflight/input-verification.json \
+            --junit /tmp/preflight/junit.xml \
+            --output /tmp/preflight/preflight-receipt.json
+
+      - name: Encrypt private preflight result
+        run: |
+          set -euo pipefail
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf - -C /tmp/preflight . | gzip -n > /tmp/preflight-result.tar.gz
+          openssl cms -encrypt -binary -aes256 -outform DER \
+            -in /tmp/preflight-result.tar.gz -out encrypted-preflight-result.cms \
+            /tmp/work/result_recipient.crt
+          python - <<'PY'
+          import hashlib,json,os
+          receipt=json.load(open('/tmp/preflight/preflight-receipt.json'))
+          encrypted=open('encrypted-preflight-result.cms','rb').read()
+          tarball=open('/tmp/preflight-result.tar.gz','rb').read()
+          public={
+            'schema_version':1,
+            'stage':'p4_1_encrypted_image_preflight',
+            'status':receipt['status'],
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'tests':receipt['tests'],
+            'lock_verified':receipt['lock_verified'],
+            'runtime_verified':receipt['runtime_verified'],
+            'network_disabled_during_tests':True,
+            'soda_requests_sent':0,
+            'image_bytes_downloaded':0,
+            'scores_computed':False,
+            'private_result_tar_sha256':hashlib.sha256(tarball).hexdigest(),
+            'encrypted_result_sha256':hashlib.sha256(encrypted).hexdigest(),
+            'plaintext_identity_or_result_published':False,
+          }
+          json.dump(public,open('public-preflight-summary.json','w'),indent=2)
+          print(json.dumps(public,sort_keys=True))
+          PY
+
+      - name: Upload encrypted preflight result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-1-preflight-result-${{ github.run_id }}
+          path: |
+            encrypted-preflight-result.cms
+            public-preflight-summary.json
+          retention-days: 3
