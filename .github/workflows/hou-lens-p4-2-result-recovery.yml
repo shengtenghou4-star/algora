@@ -1,0 +1,81 @@
+name: HOU-LENS P4.2 encrypted result recovery
+
+on:
+  push:
+    paths:
+      - '.github/hou-lens-p4-2-result-recovery/trigger.txt'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+        with:
+          ref: hou-lens-p4-executor-canary
+          fetch-depth: 1
+
+      - name: Download existing encrypted artifacts only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/recovery
+          gh api /repos/${{ github.repository }}/actions/artifacts/8836145666/zip > /tmp/recovery/private-result.zip
+          gh api /repos/${{ github.repository }}/actions/artifacts/8836145647/zip > /tmp/recovery/public-receipt.zip
+          test -s /tmp/recovery/private-result.zip
+          test -s /tmp/recovery/public-receipt.zip
+          unzip -t /tmp/recovery/private-result.zip
+          unzip -t /tmp/recovery/public-receipt.zip
+
+      - name: Publish artifact ZIPs as inert base64 chunks
+        run: |
+          set -euo pipefail
+          out=.github/hou-lens-p4-2-result-recovery/output
+          rm -rf "$out"
+          mkdir -p "$out/private" "$out/public"
+          base64 -w0 /tmp/recovery/private-result.zip > /tmp/private.b64
+          base64 -w0 /tmp/recovery/public-receipt.zip > /tmp/public.b64
+          split -b 200000 -d -a 3 /tmp/private.b64 "$out/private/part-"
+          split -b 200000 -d -a 3 /tmp/public.b64 "$out/public/part-"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json, zipfile
+          out=Path('.github/hou-lens-p4-2-result-recovery/output')
+          def H(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+          def chunks(kind):
+              return [{'file':p.name,'bytes':p.stat().st_size,'sha256':H(p)} for p in sorted((out/kind).glob('part-*'))]
+          manifest={
+            'schema_version':1,
+            'source_run_id':30754156562,
+            'source_job_id':91513311432,
+            'private_artifact_id':8836145666,
+            'public_artifact_id':8836145647,
+            'private_zip_bytes':Path('/tmp/recovery/private-result.zip').stat().st_size,
+            'private_zip_sha256':H('/tmp/recovery/private-result.zip'),
+            'public_zip_bytes':Path('/tmp/recovery/public-receipt.zip').stat().st_size,
+            'public_zip_sha256':H('/tmp/recovery/public-receipt.zip'),
+            'private_zip_members':zipfile.ZipFile('/tmp/recovery/private-result.zip').namelist(),
+            'public_zip_members':zipfile.ZipFile('/tmp/recovery/public-receipt.zip').namelist(),
+            'private_chunks':chunks('private'),
+            'public_chunks':chunks('public'),
+            'acquisition_rerun':False,
+            'soda_requests_sent_by_recovery':0,
+            'decryption_performed':False,
+            'scoring_performed':False,
+          }
+          (out/'manifest.json').write_text(json.dumps(manifest,sort_keys=True,separators=(',',':'))+'\n')
+          PY
+
+      - name: Commit encrypted recovery bytes
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/hou-lens-p4-2-result-recovery/output
+          git commit -m 'hou-lens: publish encrypted P4.2 result artifacts for private recovery'
+          git push origin HEAD:hou-lens-p4-executor-canary
