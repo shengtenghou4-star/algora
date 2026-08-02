@@ -6,6 +6,11 @@ on:
     paths:
       - .github/workflows/hou-lens-public-product-shape.yml
       - .github/hou-lens-product-shape-trigger
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/hou-lens-public-product-shape.yml
+      - .github/hou-lens-product-shape-trigger
 
 permissions:
   contents: read
