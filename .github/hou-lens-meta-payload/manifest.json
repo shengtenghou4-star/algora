@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "stage": "p4_1_encrypted_metadata_payload",
+  "run_id": "30734119307",
+  "part_count": 1,
+  "base64_sha256": "1e357bc65ca13acaca2d90d476ff02a97eca9d217c8df0a5b88c0907612d2bcd",
+  "cms_der_sha256": "3f4323c38a8f3606ac7f290b85b779663ae2c921b97e9dc916e9e48d7d33371b",
+  "payload_tar_sha256": "d08a1b74fdc9ea7c77e381cfc895f58f9914e250c6f96f0ed3d8e7a7ae78c6db",
+  "payload_tar_bytes": 11844,
+  "cms_der_bytes": 12422,
+  "plaintext_identity_published": false,
+  "images_downloaded": false,
+  "scores_computed": false
+}
