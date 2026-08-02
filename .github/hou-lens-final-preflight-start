@@ -1,0 +1,6 @@
+P4.1 final executor-bound preflight only
+lock_file_sha256=8a00c6681cebdd190da667711b7479d22ffcd175e677b0c740037eeab6976f1a
+executor_git_blob=26f9a7ed5529a98911a5d948e365eae611a0af8b
+soda_requests_allowed=false
+image_bytes_downloaded=0
+scores_computed=false
