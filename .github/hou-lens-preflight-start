@@ -1,0 +1,5 @@
+P4.1 image preflight only
+soda_requests_allowed=false
+image_bytes_downloaded=0
+scores_computed=false
+lock_file_sha256=8e10dfc393571a1b9d7dde8fde3149964545860e7c4b2ab357273a848b9d1329
