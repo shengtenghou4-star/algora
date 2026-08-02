@@ -56,33 +56,38 @@ jobs:
           run-id: 30734422166
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Wait for encrypted preflight payload
+      - name: Wait for current encrypted preflight payload
         env:
           BRANCH: ${{ github.head_ref }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/payload_parts /tmp/work /tmp/preflight
+          mkdir -p /tmp/work /tmp/preflight
           found=0
           for attempt in $(seq 1 120); do
             git fetch -q origin "$BRANCH"
             if git show "origin/$BRANCH:.github/hou-lens-preflight-payload/manifest.json" >/tmp/manifest.json 2>/dev/null; then
-              count=$(python -c "import json; print(json.load(open('/tmp/manifest.json'))['part_count'])")
-              complete=1
-              : >/tmp/payload.b64
-              for idx in $(seq -f '%03g' 1 "$count"); do
-                if ! git show "origin/$BRANCH:.github/hou-lens-preflight-payload/part-${idx}.b64" >>/tmp/payload.b64 2>/dev/null; then
-                  complete=0
-                  break
-                fi
-              done
-              if [ "$complete" = 1 ]; then found=1; break; fi
+              manifest_run=$(python -c "import json; print(json.load(open('/tmp/manifest.json')).get('run_id',''))")
+              if [ "$manifest_run" = "$EXPECTED_RUN_ID" ]; then
+                count=$(python -c "import json; print(json.load(open('/tmp/manifest.json'))['part_count'])")
+                complete=1
+                : >/tmp/payload.b64
+                for idx in $(seq -f '%03g' 1 "$count"); do
+                  if ! git show "origin/$BRANCH:.github/hou-lens-preflight-payload/part-${idx}.b64" >>/tmp/payload.b64 2>/dev/null; then
+                    complete=0
+                    break
+                  fi
+                done
+                if [ "$complete" = 1 ]; then found=1; break; fi
+              fi
             fi
             sleep 10
           done
           test "$found" = 1
           python - <<'PY'
-          import base64,hashlib,json
+          import base64,hashlib,json,os
           m=json.load(open('/tmp/manifest.json'))
+          if str(m['run_id']) != os.environ['EXPECTED_RUN_ID']: raise SystemExit('stale payload run ID')
           b64=open('/tmp/payload.b64','rb').read()
           if hashlib.sha256(b64).hexdigest()!=m['base64_sha256']: raise SystemExit('base64 hash mismatch')
           der=base64.b64decode(b64,validate=True)
@@ -99,7 +104,7 @@ jobs:
           PY
           tar -xzf /tmp/payload.tar.gz -C /tmp/work
 
-      - name: Verify lock, blobs, manifests and runtime
+      - name: Verify lock, blobs, manifest bindings and runtime
         run: |
           set -euo pipefail
           python /tmp/work/verify_preflight_inputs.py \
@@ -117,7 +122,7 @@ jobs:
             -v /tmp/runtime:/runtime:ro \
             -v /tmp/preflight:/output \
             "$IMAGE" sh -lc '
-              set -euo pipefail
+              set -eu
               python -m pip install --disable-pip-version-check --no-index \
                 --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null
               cd /work
