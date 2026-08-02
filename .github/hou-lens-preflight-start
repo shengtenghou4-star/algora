@@ -1,4 +1,5 @@
 P4.1 image preflight only
+attempt=2
 soda_requests_allowed=false
 image_bytes_downloaded=0
 scores_computed=false
