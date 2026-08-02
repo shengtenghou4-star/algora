@@ -127,6 +127,7 @@ jobs:
               python -m pip install --disable-pip-version-check --no-index \
                 --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null
               cd /work
+              export PYTHONPYCACHEPREFIX=/tmp/pycache
               PYTHONPATH=src python -m py_compile scripts/v3_execute_p4_1_locked_images.py
               PYTHONPATH=src pytest -q \
                 tests/test_p4_image_acquisition.py \
