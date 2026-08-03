@@ -3,6 +3,7 @@ name: HOU-LENS P4.4 frozen runtime closure audit
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened]
     paths:
       - .github/workflows/hou-lens-p4-4-runtime-closure-audit.yml
 
