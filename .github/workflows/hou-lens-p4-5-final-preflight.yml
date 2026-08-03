@@ -1,0 +1,280 @@
+name: HOU-LENS P4.5 final executor-bound preflight
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/hou-lens-p4-5-final-preflight.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  final-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PAYLOAD_BRANCH: hou-lens-p4-5-preflight-payload
+      PAYLOAD_DIR: .github/hou-lens-p4-5-preflight-payload
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Generate ephemeral preflight certificate
+        run: |
+          set -euo pipefail
+          openssl req -x509 -newkey rsa:3072 -nodes -days 1 \
+            -subj '/CN=HOU-LENS-P4.5-final-preflight' \
+            -keyout /tmp/runner.key -out runner.crt >/dev/null 2>&1
+          python - <<'PY'
+          import hashlib, json, os
+          raw = open('runner.crt','rb').read()
+          receipt = {
+              'schema_version': 1,
+              'stage': 'p4_5_final_executor_bound_preflight_handshake',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'head_sha': os.environ['EXPECTED_HEAD_SHA'],
+              'certificate_sha256': hashlib.sha256(raw).hexdigest(),
+              'private_key_published': False,
+              'payload_released': False,
+              'soda_requests_sent': 0,
+              'image_bytes_downloaded': 0,
+              'scores_computed': False,
+          }
+          open('handshake.json','w').write(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Upload preflight handshake
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-5-final-preflight-handshake-${{ github.run_id }}
+          path: |
+            runner.crt
+            handshake.json
+          retention-days: 2
+
+      - name: Download frozen base runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: hou-lens-p4-1-runtime-30734422166
+          path: /tmp/runtime
+          repository: shengtenghou4-star/algora
+          run-id: 30734422166
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download frozen Requests runtime patch
+        uses: actions/download-artifact@v4
+        with:
+          name: hou-lens-p4-5-requests-runtime-patch-30808837306
+          path: /tmp/patch-artifact
+          repository: shengtenghou4-star/algora
+          run-id: 30808837306
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for exact encrypted preflight payload
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/work /tmp/result /tmp/patch
+          found=0
+          for attempt in $(seq 1 540); do
+            git fetch -q origin "+refs/heads/$PAYLOAD_BRANCH:refs/remotes/origin/$PAYLOAD_BRANCH"
+            REF="refs/remotes/origin/$PAYLOAD_BRANCH"
+            if git show "$REF:$PAYLOAD_DIR/manifest.json" >/tmp/manifest.json 2>/dev/null; then
+              if python - <<'PY'
+          import json, os
+          m=json.load(open('/tmp/manifest.json'))
+          ok=(str(m.get('run_id'))==os.environ['GITHUB_RUN_ID'] and
+              str(m.get('run_attempt'))==os.environ['GITHUB_RUN_ATTEMPT'] and
+              m.get('executor_head_sha')==os.environ['EXPECTED_HEAD_SHA'] and
+              m.get('protocol')=='HOU-LENS-P4.5-FINAL-PREFLIGHT')
+          raise SystemExit(0 if ok else 1)
+          PY
+              then
+                found=1
+                break
+              fi
+            fi
+            sleep 10
+          done
+          test "$found" = 1
+
+          REF="refs/remotes/origin/$PAYLOAD_BRANCH"
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          m=json.load(open('/tmp/manifest.json'))
+          prefix=os.environ['PAYLOAD_DIR']+'/'
+          ref='refs/remotes/origin/'+os.environ['PAYLOAD_BRANCH']
+          actual=subprocess.check_output(['git','ls-tree','-r','--name-only',ref,'--',os.environ['PAYLOAD_DIR']],text=True).splitlines()
+          expected=[prefix+'manifest.json']+[prefix+p['file'] for p in m['parts']]
+          if sorted(actual)!=sorted(expected):
+              raise SystemExit('unexpected payload-directory file set')
+          pathlib.Path('/tmp/payload.b64').write_bytes(b'')
+          PY
+
+          : >/tmp/payload.b64
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          m=json.load(open('/tmp/manifest.json'))
+          ref='refs/remotes/origin/'+os.environ['PAYLOAD_BRANCH']
+          assembled=bytearray()
+          for part in m['parts']:
+              raw=subprocess.check_output(['git','show',f"{ref}:{os.environ['PAYLOAD_DIR']}/{part['file']}"])
+              if len(raw)!=int(part['bytes']): raise SystemExit(f"part length mismatch {part['file']}")
+              if hashlib.sha256(raw).hexdigest()!=part['sha256']: raise SystemExit(f"part hash mismatch {part['file']}")
+              assembled.extend(raw)
+          if len(assembled)!=int(m['base64_bytes']): raise SystemExit('base64 length mismatch')
+          if hashlib.sha256(assembled).hexdigest()!=m['base64_sha256']: raise SystemExit('base64 hash mismatch')
+          import base64
+          der=base64.b64decode(bytes(assembled),validate=True)
+          if len(der)!=int(m['cms_der_bytes']): raise SystemExit('CMS length mismatch')
+          if hashlib.sha256(der).hexdigest()!=m['cms_der_sha256']: raise SystemExit('CMS hash mismatch')
+          pathlib.Path('/tmp/payload.der').write_bytes(der)
+          PY
+
+          openssl cms -decrypt -binary -inform DER -in /tmp/payload.der \
+            -recip runner.crt -inkey /tmp/runner.key -out /tmp/payload.tar.gz
+          python - <<'PY'
+          import hashlib,json,pathlib,tarfile
+          m=json.load(open('/tmp/manifest.json'))
+          raw=pathlib.Path('/tmp/payload.tar.gz').read_bytes()
+          if len(raw)!=int(m['payload_tar_bytes']): raise SystemExit('payload tar length mismatch')
+          if hashlib.sha256(raw).hexdigest()!=m['payload_tar_sha256']: raise SystemExit('payload tar hash mismatch')
+          expected=set(m['payload_files'])
+          with tarfile.open('/tmp/payload.tar.gz','r:gz') as tf:
+              members=tf.getmembers()
+              names={x.name for x in members}
+              if names!=expected: raise SystemExit('payload tar file-set mismatch')
+              for member in members:
+                  if not member.isfile() or member.name.startswith('/') or '..' in pathlib.PurePosixPath(member.name).parts:
+                      raise SystemExit('unsafe payload member')
+              tf.extractall('/tmp/work')
+          PY
+
+      - name: Verify frozen inputs, source blobs and continuation binding
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv, hashlib, json, os, pathlib, subprocess
+          root=pathlib.Path('/tmp/work')
+          expected_sha={
+            'P4_1_ONE_USE_IMAGE_ACCESS_LOCK.json':'8a00c6681cebdd190da667711b7479d22ffcd175e677b0c740037eeab6976f1a',
+            'P4_1_IMAGE_OBJECT_MANIFEST.csv':'79edba98bc3e61ee8c1be36174eb02e050c112478563f1119a8f7b330dccd795',
+            'P4_1_SODA_REQUEST_MANIFEST.csv':'d5c66c1288621e6826b56fb02658dd9bddcb449f82fa10eec135959b67436904',
+          }
+          expected_blob={
+            'src/hou_lens/p4_image_acquisition.py':'0067fc525c0ddc3040cfc240e22d0cdee85cddbd',
+            'src/hou_lens/p4_soda_manifest.py':'eb2832a066eb147988bef297eb6180a8dca58e2f',
+            'tests/test_p4_image_acquisition.py':'35fd3dd8327b20e2bddab2f299e2a6a955b3bfb7',
+            'tests/test_p4_soda_manifest.py':'e4af40d8ea3e9584204df9dd1cd23aff3e1d693e',
+            'scripts/v3_execute_p4_1_locked_images.py':'26f9a7ed5529a98911a5d948e365eae611a0af8b',
+          }
+          for name,want in expected_sha.items():
+              got=hashlib.sha256((root/name).read_bytes()).hexdigest()
+              if got!=want: raise SystemExit(f'hash mismatch {name}')
+          for name,want in expected_blob.items():
+              got=subprocess.check_output(['git','hash-object','--stdin'],input=(root/name).read_bytes()).decode().strip()
+              if got!=want: raise SystemExit(f'blob mismatch {name}')
+          lock=json.loads((root/'P4_1_ONE_USE_IMAGE_ACCESS_LOCK.json').read_text())
+          if lock.get('status')!='SEALED_NOT_CONSUMED' or lock.get('lock_sha256')!='afd688befe6901ced3d732cf450d619e50f462b353c6547dcf715c196d003a78':
+              raise SystemExit('lock contract mismatch')
+          with (root/'P4_1_IMAGE_OBJECT_MANIFEST.csv').open(newline='',encoding='utf-8') as f:
+              if sum(1 for _ in csv.DictReader(f))!=188: raise SystemExit('object count mismatch')
+          with (root/'P4_1_SODA_REQUEST_MANIFEST.csv').open(newline='',encoding='utf-8') as f:
+              rows=list(csv.DictReader(f))
+          if len(rows)!=940 or len({r['request_key'] for r in rows})!=940: raise SystemExit('request count mismatch')
+          binding=json.loads((root/'P4_5_PREFLIGHT_BINDING.json').read_text())
+          cert_sha=hashlib.sha256(pathlib.Path('runner.crt').read_bytes()).hexdigest()
+          checks=[
+              str(binding.get('run_id'))==os.environ['GITHUB_RUN_ID'],
+              str(binding.get('run_attempt'))==os.environ['GITHUB_RUN_ATTEMPT'],
+              binding.get('executor_head_sha')==os.environ['EXPECTED_HEAD_SHA'],
+              binding.get('runner_certificate_sha256')==cert_sha,
+              binding.get('authorization_record_count')==1,
+              binding.get('scientific_access_execution_count')==0,
+              binding.get('soda_requests_sent')==0,
+              binding.get('image_bytes_downloaded')==0,
+              binding.get('scores_computed') is False,
+          ]
+          if not all(checks): raise SystemExit('preflight binding mismatch')
+          PY
+
+      - name: Verify runtime artifacts and run exact offline preflight
+        run: |
+          set -euo pipefail
+          test "$(sha256sum /tmp/runtime/wheels.tar.gz | cut -d' ' -f1)" = '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1'
+          test "$(sha256sum /tmp/runtime/wheel-manifest.sha256 | cut -d' ' -f1)" = 'a75bfdb37baaac7209a6e172917a18970dac1a48aad98d947addc6fa17748e4a'
+          test "$(sha256sum /tmp/patch-artifact/p4-5-requests-runtime-patch.tar.gz | cut -d' ' -f1)" = 'a8160b489191039c5f2be23be741c12e02323099d7d9f00ca9c62324f94e4f5b'
+          test "$(sha256sum /tmp/patch-artifact/p4-5-requests-runtime-patch-receipt.json | cut -d' ' -f1)" = '01169787e45dea3f370a6ca7d789167770cf3b547b0cfd736b9b77ebce9d598a'
+          tar -xzf /tmp/patch-artifact/p4-5-requests-runtime-patch.tar.gz -C /tmp/patch
+          test "$(sha256sum /tmp/patch/requests-wheel-manifest.sha256 | cut -d' ' -f1)" = '952a86e2842f5f4cfb35de196fa8587af949a6732a57edf8a2c43be96665d3d3'
+
+          IMAGE='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
+          docker pull "$IMAGE" >/dev/null
+          docker run --rm --network none \
+            -v /tmp/work:/work:ro -v /tmp/runtime:/runtime:ro -v /tmp/patch:/patch:ro -v /tmp/result:/result \
+            "$IMAGE" sh -lc '
+              set -eu
+              cd /runtime/wheels && sha256sum -c ../wheel-manifest.sha256 >/dev/null
+              cd /patch && sha256sum -c requests-wheel-manifest.sha256 >/dev/null
+              python -m pip install --disable-pip-version-check --no-index --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null
+              python -m pip install --disable-pip-version-check --no-index --find-links /patch requests==2.32.5 >/dev/null
+              cd /work
+              PYTHONPATH=src python -m py_compile scripts/v3_execute_p4_1_locked_images.py
+              PYTHONPATH=src:. pytest -q -p no:cacheprovider --junitxml=/result/junit.xml tests/test_p4_image_acquisition.py tests/test_p4_soda_manifest.py > /result/pytest.txt
+              PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor; open(\"/result/import.json\",\"w\").write(json.dumps({\"executor_imported\":True,\"requests_version\":requests.__version__,\"executor_module\":executor.__name__},sort_keys=True)+\"\\n\")"
+            '
+
+          python - <<'PY'
+          import json,os,pathlib,xml.etree.ElementTree as ET
+          root=ET.parse('/tmp/result/junit.xml').getroot()
+          suite=root if root.tag=='testsuite' else root.find('testsuite')
+          tests=int(suite.attrib.get('tests','-1'))
+          failures=int(suite.attrib.get('failures','-1'))
+          errors=int(suite.attrib.get('errors','-1'))
+          skipped=int(suite.attrib.get('skipped','-1'))
+          imp=json.loads(pathlib.Path('/tmp/result/import.json').read_text())
+          if (tests,failures,errors,skipped)!=(8,0,0,0): raise SystemExit('exact test gate failed')
+          if not imp.get('executor_imported') or imp.get('requests_version')!='2.32.5': raise SystemExit('executor import gate failed')
+          receipt={
+            'schema_version':1,
+            'stage':'p4_5_final_executor_bound_preflight',
+            'status':'PASS_FINAL_P4_5_EXECUTOR_BOUND_PREFLIGHT',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+            'executor_head_sha':os.environ['EXPECTED_HEAD_SHA'],
+            'container_image':'python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1',
+            'base_runtime_artifact_id':8829046472,
+            'base_runtime_artifact_digest':'sha256:f655443bfece4634b856d66d398efaa6f4d726ae1760726b651a92f885f98d9f',
+            'requests_patch_artifact_id':8853932417,
+            'requests_patch_artifact_digest':'sha256:31630df77b54431460febab4f3eb935490a843eadf8389314fc04f0d211bdb94',
+            'tests':tests,'failures':failures,'errors':errors,'skipped':skipped,
+            'executor_compiled':True,
+            'executor_imported':True,
+            'executor_git_blob':'26f9a7ed5529a98911a5d948e365eae611a0af8b',
+            'requests_version':'2.32.5',
+            'lock_file_sha256':'8a00c6681cebdd190da667711b7479d22ffcd175e677b0c740037eeab6976f1a',
+            'object_manifest_sha256':'79edba98bc3e61ee8c1be36174eb02e050c112478563f1119a8f7b330dccd795',
+            'soda_request_manifest_sha256':'d5c66c1288621e6826b56fb02658dd9bddcb449f82fa10eec135959b67436904',
+            'planned_soda_requests':940,
+            'network_disabled_during_tests_and_import':True,
+            'payload_released_for_scientific_execution':False,
+            'soda_requests_sent':0,
+            'image_bytes_downloaded':0,
+            'scores_computed':False,
+            'unknown_dr5_only_targets_queried':0,
+          }
+          pathlib.Path('/tmp/result/P4_5_FINAL_PREFLIGHT_RECEIPT.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(receipt,sort_keys=True))
+          PY
+
+      - name: Upload final P4.5 preflight receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-5-final-preflight-result-${{ github.run_id }}
+          path: /tmp/result/P4_5_FINAL_PREFLIGHT_RECEIPT.json
+          retention-days: 3
