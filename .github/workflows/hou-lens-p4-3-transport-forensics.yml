@@ -1,0 +1,76 @@
+name: HOU-LENS P4.3 encrypted transport forensics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/hou-lens-p4-3-transport-forensics.yml
+
+permissions:
+  contents: read
+
+jobs:
+  forensics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit encrypted P4.3 payload bytes without decryption
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path('.github/hou-lens-p4-3-acquisition-payload')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          assembled = bytearray()
+          parts = []
+          for entry in manifest['parts']:
+              path = root / entry['file']
+              raw = path.read_bytes()
+              actual_sha = hashlib.sha256(raw).hexdigest()
+              parts.append({
+                  'file': entry['file'],
+                  'expected_bytes': int(entry['bytes']),
+                  'actual_bytes': len(raw),
+                  'byte_delta': len(raw) - int(entry['bytes']),
+                  'expected_sha256': entry['sha256'],
+                  'actual_sha256': actual_sha,
+                  'sha256_match': actual_sha == entry['sha256'],
+                  'ends_lf': raw.endswith(b'\n'),
+                  'ends_crlf': raw.endswith(b'\r\n'),
+              })
+              assembled.extend(raw)
+
+          report = {
+              'schema_version': 1,
+              'protocol': manifest.get('protocol'),
+              'run_id': str(manifest.get('run_id')),
+              'part_count': len(parts),
+              'all_part_lengths_match': all(p['byte_delta'] == 0 for p in parts),
+              'all_part_hashes_match': all(p['sha256_match'] for p in parts),
+              'expected_base64_bytes': int(manifest['base64_bytes']),
+              'actual_base64_bytes': len(assembled),
+              'base64_byte_delta': len(assembled) - int(manifest['base64_bytes']),
+              'expected_base64_sha256': manifest['base64_sha256'],
+              'actual_base64_sha256': hashlib.sha256(assembled).hexdigest(),
+              'base64_sha256_match': hashlib.sha256(assembled).hexdigest() == manifest['base64_sha256'],
+              'parts': parts,
+              'soda_requests_sent': 0,
+              'image_bytes_downloaded': 0,
+              'scores_computed': False,
+              'decryption_attempted': False,
+          }
+          Path('p4_3_transport_forensics.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Upload transport forensics
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-3-transport-forensics-${{ github.run_id }}
+          path: p4_3_transport_forensics.json
+          retention-days: 3
