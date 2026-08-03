@@ -35,49 +35,13 @@ jobs:
           set +e
           docker run --rm --network none \
             -v /tmp/runtime:/runtime:ro \
-            "$IMAGE" sh -lc '
-              set -eu
-              python -m pip install --disable-pip-version-check --no-index \
-                --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null
-              python - <<"PY"
-import importlib.util, json, platform, sys
-mods = ["numpy", "scipy", "astropy", "pytest", "requests"]
-result = {
-    "schema_version": 1,
-    "stage": "p4_4_frozen_runtime_dependency_closure",
-    "python": sys.version,
-    "platform": platform.platform(),
-    "modules": {name: importlib.util.find_spec(name) is not None for name in mods},
-}
-print(json.dumps(result, sort_keys=True))
-if not result["modules"]["requests"]:
-    raise SystemExit(42)
-import requests
-print(json.dumps({"requests_version": requests.__version__}, sort_keys=True))
-PY
-            ' > /tmp/runtime-audit.log 2>&1
+            "$IMAGE" sh -lc 'set -eu; python -m pip install --disable-pip-version-check --no-index --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null; python -c "import importlib.util,json,platform,sys; mods=[\"numpy\",\"scipy\",\"astropy\",\"pytest\",\"requests\"]; result={\"schema_version\":1,\"stage\":\"p4_4_frozen_runtime_dependency_closure\",\"python\":sys.version,\"platform\":platform.platform(),\"modules\":{name:importlib.util.find_spec(name) is not None for name in mods}}; print(json.dumps(result,sort_keys=True)); raise SystemExit(0 if result[\"modules\"][\"requests\"] else 42)"; python -c "import json,requests; print(json.dumps({\"requests_version\":requests.__version__},sort_keys=True))"' \
+            > /tmp/runtime-audit.log 2>&1
           code=$?
           set -e
           cat /tmp/runtime-audit.log
-          python - "$code" <<'PY'
-          import json, pathlib, sys
-          code=int(sys.argv[1])
-          log=pathlib.Path('/tmp/runtime-audit.log').read_text(errors='replace')
-          result={
-            'schema_version':1,
-            'stage':'p4_4_frozen_runtime_dependency_closure',
-            'container_image':'python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1',
-            'runtime_artifact_id':8829046472,
-            'docker_exit_code':code,
-            'requests_import_pass':code==0,
-            'soda_requests_sent':0,
-            'image_bytes_downloaded':0,
-            'scores_computed':False,
-            'status':'PASS_RUNTIME_CLOSURE' if code==0 else 'FAIL_MISSING_RUNTIME_DEPENDENCY',
-            'log':log,
-          }
-          pathlib.Path('p4_4_runtime_closure_audit.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
-          PY
+          export AUDIT_CODE="$code"
+          python -c 'import json,os,pathlib; code=int(os.environ["AUDIT_CODE"]); log=pathlib.Path("/tmp/runtime-audit.log").read_text(errors="replace"); result={"schema_version":1,"stage":"p4_4_frozen_runtime_dependency_closure","container_image":"python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1","runtime_artifact_id":8829046472,"docker_exit_code":code,"requests_import_pass":code==0,"soda_requests_sent":0,"image_bytes_downloaded":0,"scores_computed":False,"status":"PASS_RUNTIME_CLOSURE" if code==0 else "FAIL_MISSING_RUNTIME_DEPENDENCY","log":log}; pathlib.Path("p4_4_runtime_closure_audit.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")'
 
       - name: Upload runtime closure audit
         uses: actions/upload-artifact@v4
