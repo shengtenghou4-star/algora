@@ -86,6 +86,8 @@ jobs:
             -v /tmp/work:/work:ro -v /tmp/runtime:/runtime:ro -v /tmp/patch:/patch:ro -v /tmp/result:/result \
             "$IMAGE" sh -lc '
               set -eu
+              export PYTHONPYCACHEPREFIX=/result/pycache
+              mkdir -p "$PYTHONPYCACHEPREFIX"
               cd /runtime/wheels && sha256sum -c ../wheel-manifest.sha256 >/dev/null
               cd /patch && sha256sum -c requests-wheel-manifest.sha256 >/dev/null
               python -m pip install --disable-pip-version-check --no-index --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null
