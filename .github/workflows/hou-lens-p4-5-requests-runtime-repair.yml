@@ -1,0 +1,59 @@
+name: HOU-LENS P4.5 Requests runtime repair
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/hou-lens-p4-5-requests-runtime-repair.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-runtime-patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frozen P4.1 runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: hou-lens-p4-1-runtime-30734422166
+          path: /tmp/runtime
+          repository: shengtenghou4-star/algora
+          run-id: 30734422166
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build exact Requests patch and verify offline closure
+        run: |
+          set -euo pipefail
+          IMAGE='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
+          rm -rf /tmp/requests-patch
+          mkdir -p /tmp/requests-patch
+          docker pull "$IMAGE" >/dev/null
+          docker run --rm \
+            -v /tmp/requests-patch:/patch \
+            "$IMAGE" sh -lc 'set -eu; python -m pip download --disable-pip-version-check --only-binary=:all: --dest /patch requests==2.32.5'
+          cd /tmp/requests-patch
+          sha256sum ./*.whl | sed 's#  \./#  #' | LC_ALL=C sort > requests-wheel-manifest.sha256
+          docker run --rm --network none \
+            -v /tmp/runtime:/runtime:ro \
+            -v /tmp/requests-patch:/patch \
+            "$IMAGE" sh -lc 'set -eu; python -m pip install --disable-pip-version-check --no-index --find-links /runtime/wheels -r /runtime/requirements.in >/dev/null; python -m pip install --disable-pip-version-check --no-index --find-links /patch requests==2.32.5 >/dev/null; cd /patch; sha256sum -c requests-wheel-manifest.sha256; python -c "import certifi,charset_normalizer,idna,json,requests,urllib3; result={\"schema_version\":1,\"stage\":\"p4_5_requests_runtime_closure\",\"status\":\"PASS_OFFLINE_RUNTIME_CLOSURE\",\"versions\":{\"requests\":requests.__version__,\"certifi\":certifi.__version__,\"charset_normalizer\":charset_normalizer.__version__,\"idna\":idna.__version__,\"urllib3\":urllib3.__version__},\"soda_requests_sent\":0,\"image_bytes_downloaded\":0,\"scores_computed\":False}; open(\"p4_5_requests_runtime_closure.json\",\"w\").write(json.dumps(result,indent=2,sort_keys=True)+\"\\n\")"'
+          cd /tmp
+          tar -czf p4-5-requests-runtime-patch.tar.gz -C /tmp/requests-patch .
+          python -c 'import hashlib,json,pathlib; root=pathlib.Path("/tmp/requests-patch"); wheels=[]; [(wheels.append({"file":p.name,"bytes":p.stat().st_size,"sha256":hashlib.sha256(p.read_bytes()).hexdigest()})) for p in sorted(root.glob("*.whl"))]; tar=pathlib.Path("/tmp/p4-5-requests-runtime-patch.tar.gz"); closure=json.loads((root/"p4_5_requests_runtime_closure.json").read_text()); receipt={"schema_version":1,"stage":"p4_5_requests_runtime_repair","status":"PASS_FROZEN_REQUESTS_RUNTIME_PATCH","container_image":"python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1","base_runtime_artifact_id":8829046472,"base_runtime_artifact_digest":"sha256:f655443bfece4634b856d66d398efaa6f4d726ae1760726b651a92f885f98d9f","requests_pin":"requests==2.32.5","versions":closure["versions"],"wheel_count":len(wheels),"wheels":wheels,"patch_tar_bytes":tar.stat().st_size,"patch_tar_sha256":hashlib.sha256(tar.read_bytes()).hexdigest(),"soda_requests_sent":0,"image_bytes_downloaded":0,"scores_computed":False}; pathlib.Path("/tmp/p4-5-requests-runtime-patch-receipt.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")'
+          cat /tmp/p4-5-requests-runtime-patch-receipt.json
+
+      - name: Upload P4.5 Requests runtime patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p4-5-requests-runtime-patch-${{ github.run_id }}
+          path: |
+            /tmp/p4-5-requests-runtime-patch.tar.gz
+            /tmp/p4-5-requests-runtime-patch-receipt.json
+          retention-days: 3
+          compression-level: 0
