@@ -2,10 +2,9 @@ name: HOU-LENS P4.6 comment transport publisher
 
 on:
   push:
-    branches:
-      - hou-lens-p4-5-scientific-payload
+    branches: [main]
     paths:
-      - .github/hou-lens-p46-transport-trigger.txt
+      - .github/hou-lens-p46-main-trigger.txt
 
 permissions:
   contents: write
@@ -35,34 +34,22 @@ jobs:
           ref: hou-lens-p4-5-scientific-payload
           fetch-depth: 0
 
-      - name: Recover exact transport bytes from PR comments
+      - name: Recover and verify exact encrypted payload
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           python - <<'PY'
-          import base64
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import re
-          import urllib.request
-          import zlib
+          import base64, hashlib, json, os, pathlib, re, urllib.request, zlib
 
           repo = os.environ['REPOSITORY']
-          pr = os.environ['PR_NUMBER']
           token = os.environ['GH_TOKEN']
-          expected_run = os.environ['EXPECTED_RUN_ID']
-          expected_attempt = os.environ['EXPECTED_RUN_ATTEMPT']
-
           comments = []
           page = 1
           while True:
-              url = f'https://api.github.com/repos/{repo}/issues/{pr}/comments?per_page=100&page={page}'
               req = urllib.request.Request(
-                  url,
+                  f"https://api.github.com/repos/{repo}/issues/{os.environ['PR_NUMBER']}/comments?per_page=100&page={page}",
                   headers={
                       'Authorization': f'Bearer {token}',
                       'Accept': 'application/vnd.github+json',
@@ -77,111 +64,64 @@ jobs:
                   break
               page += 1
 
-          header_re = re.compile(
-              r'^HOU-LENS-P46-TRANSPORT v1 run=(\d+) attempt=(\d+) replica=([ABC]) group=(\d+)$'
-          )
-          block_re = re.compile(r'^P(\d{3}) crc32=([0-9a-f]{8}) len=(\d+)$')
-          alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-          inverse_rot = {alphabet[(i + 7) % 64]: alphabet[i] for i in range(64)}
-
-          candidates = {i: [] for i in range(28)}
-          seen_comment_ids = []
+          header = re.compile(r'^HOU-LENS-P46-TRANSPORT v1 run=(\d+) attempt=(\d+) replica=A group=(\d+)$')
+          block = re.compile(r'^P(\d{3}) crc32=([0-9a-f]{8}) len=(\d+)$')
+          recovered = {}
+          source_comments = {}
           for comment in comments:
-              body = comment.get('body') or ''
-              lines = body.splitlines()
+              lines = (comment.get('body') or '').splitlines()
               if not lines:
                   continue
-              header = header_re.fullmatch(lines[0].strip())
-              if not header:
+              match = header.fullmatch(lines[0].strip())
+              if not match or match.group(1) != os.environ['EXPECTED_RUN_ID'] or match.group(2) != os.environ['EXPECTED_RUN_ATTEMPT']:
                   continue
-              run_id, attempt, replica, group = header.groups()
-              if run_id != expected_run or attempt != expected_attempt:
-                  continue
-              seen_comment_ids.append(comment['id'])
-              index = 1
-              while index < len(lines):
-                  match = block_re.fullmatch(lines[index].strip())
-                  if not match or index + 1 >= len(lines):
-                      index += 1
+              i = 1
+              while i + 1 < len(lines):
+                  meta = block.fullmatch(lines[i].strip())
+                  if not meta:
+                      i += 1
                       continue
-                  part_index = int(match.group(1))
-                  wanted_crc = match.group(2)
-                  wanted_len = int(match.group(3))
-                  encoded = lines[index + 1].strip()
-                  if replica == 'A':
-                      decoded = encoded
-                  elif replica == 'B':
-                      decoded = encoded[::-1]
-                  else:
-                      decoded = ''.join('=' if ch == '=' else inverse_rot.get(ch, '?') for ch in encoded)
-                  raw = decoded.encode('ascii', errors='strict')
-                  got_crc = f'{zlib.crc32(raw) & 0xffffffff:08x}'
-                  valid = (
-                      0 <= part_index < 28
-                      and len(raw) == wanted_len
-                      and got_crc == wanted_crc
-                      and set(decoded) <= set(alphabet + '=')
-                  )
-                  if valid:
-                      candidates[part_index].append((replica, decoded, comment['id']))
-                  index += 2
+                  index = int(meta.group(1))
+                  text = lines[i + 1].strip()
+                  raw = text.encode('ascii')
+                  crc = f'{zlib.crc32(raw) & 0xffffffff:08x}'
+                  if len(raw) == int(meta.group(3)) and crc == meta.group(2):
+                      if index in recovered and recovered[index] != text:
+                          raise SystemExit(f'conflicting transport block {index}')
+                      recovered[index] = text
+                      source_comments[index] = comment['id']
+                  i += 2
 
-          missing = [i for i, rows in candidates.items() if not rows]
-          conflicts = []
-          recovered = []
-          provenance = []
-          for i in range(28):
-              rows = candidates[i]
-              if not rows:
-                  continue
-              values = {row[1] for row in rows}
-              if len(values) != 1:
-                  conflicts.append(i)
-                  continue
-              value = next(iter(values))
-              recovered.append(value)
-              provenance.append({
-                  'part_index': i,
-                  'replicas': sorted({row[0] for row in rows}),
-                  'comment_ids': sorted({row[2] for row in rows}),
-                  'bytes': len(value),
-                  'crc32': f'{zlib.crc32(value.encode()) & 0xffffffff:08x}',
-              })
-
-          audit = {
-              'schema_version': 1,
-              'stage': 'p4_6_comment_transport_recovery',
-              'run_id': expected_run,
-              'run_attempt': expected_attempt,
-              'matching_comment_ids': sorted(set(seen_comment_ids)),
-              'valid_candidate_counts': {str(i): len(candidates[i]) for i in range(28)},
-              'missing_parts': missing,
-              'conflicting_parts': conflicts,
-              'provenance': provenance,
-          }
-          pathlib.Path('/tmp/transport-audit.json').write_text(
-              json.dumps(audit, indent=2, sort_keys=True) + '\n'
-          )
-          print(json.dumps(audit, indent=2, sort_keys=True))
-          if missing or conflicts:
-              raise SystemExit('transport recovery incomplete')
-
-          assembled = ''.join(recovered).encode('ascii')
+          missing = [i for i in range(28) if i not in recovered]
+          if missing:
+              raise SystemExit(f'missing or corrupt transport blocks: {missing}')
+          assembled = ''.join(recovered[i] for i in range(28)).encode('ascii')
           if len(assembled) != int(os.environ['EXPECTED_B64_BYTES']):
-              raise SystemExit('global base64 byte count mismatch')
+              raise SystemExit('base64 byte-count mismatch')
           if hashlib.sha256(assembled).hexdigest() != os.environ['EXPECTED_B64_SHA256']:
-              raise SystemExit('global base64 sha256 mismatch')
+              raise SystemExit('base64 sha256 mismatch')
           der = base64.b64decode(assembled, validate=True)
           if len(der) != int(os.environ['EXPECTED_CMS_BYTES']):
-              raise SystemExit('CMS byte count mismatch')
+              raise SystemExit('CMS byte-count mismatch')
           if hashlib.sha256(der).hexdigest() != os.environ['EXPECTED_CMS_SHA256']:
               raise SystemExit('CMS sha256 mismatch')
           pathlib.Path('/tmp/payload.b64').write_bytes(assembled)
-          pathlib.Path('/tmp/payload.der').write_bytes(der)
-          print('PASS_COMMENT_TRANSPORT_GLOBAL_HASHES')
+          pathlib.Path('/tmp/transport-audit.json').write_text(json.dumps({
+              'schema_version': 1,
+              'status': 'PASS_EXACT_28_BLOCK_COMMENT_TRANSPORT',
+              'run_id': os.environ['EXPECTED_RUN_ID'],
+              'run_attempt': os.environ['EXPECTED_RUN_ATTEMPT'],
+              'block_count': 28,
+              'base64_bytes': len(assembled),
+              'base64_sha256': hashlib.sha256(assembled).hexdigest(),
+              'cms_bytes': len(der),
+              'cms_sha256': hashlib.sha256(der).hexdigest(),
+              'source_comment_ids': source_comments,
+          }, indent=2, sort_keys=True) + '\n')
+          print('PASS_EXACT_28_BLOCK_COMMENT_TRANSPORT')
           PY
 
-      - name: Publish parts atomically without manifest
+      - name: Publish four encrypted parts without manifest
         run: |
           set -euo pipefail
           git config user.name 'hou-lens-p46-transport-bot'
@@ -191,40 +131,34 @@ jobs:
           split -b 28576 -d -a 3 /tmp/payload.b64 /tmp/formal-part-
           python - <<'PY'
           import pathlib
-          src = sorted(pathlib.Path('/tmp').glob('formal-part-*'))
-          if len(src) != 4 or any(p.stat().st_size != 28576 for p in src):
-              raise SystemExit('formal four-part split mismatch')
+          parts = sorted(pathlib.Path('/tmp').glob('formal-part-*'))
+          if len(parts) != 4 or any(p.stat().st_size != 28576 for p in parts):
+              raise SystemExit('formal split mismatch')
           root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
-          for i, path in enumerate(src, 1):
-              (root / f'part-{i:03d}.b64').write_bytes(path.read_bytes())
+          for index, part in enumerate(parts, 1):
+              (root / f'part-{index:03d}.b64').write_bytes(part.read_bytes())
           PY
           git add -A "$PAYLOAD_DIR"
           git commit -m 'Publish P4.6 attempt 3 encrypted payload parts'
           git push origin "HEAD:$TARGET_BRANCH"
 
-      - name: Publish manifest last
+      - name: Publish manifest as the final commit
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import subprocess
-
+          import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path(os.environ['PAYLOAD_DIR'])
           parts = []
           for path in sorted(root.glob('part-*.b64')):
               raw = path.read_bytes()
-              blob = subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip()
               parts.append({
                   'file': path.name,
                   'bytes': len(raw),
                   'sha256': hashlib.sha256(raw).hexdigest(),
-                  'git_blob': blob,
+                  'git_blob': subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip(),
               })
-          if len(parts) != 4 or sum(row['bytes'] for row in parts) != int(os.environ['EXPECTED_B64_BYTES']):
-              raise SystemExit('formal manifest part-set mismatch')
+          if len(parts) != 4 or sum(p['bytes'] for p in parts) != int(os.environ['EXPECTED_B64_BYTES']):
+              raise SystemExit('manifest part-set mismatch')
           manifest = {
               'schema_version': 2,
               'protocol': 'HOU-LENS-P4.5-SINGLE-SCIENTIFIC-EXECUTION',
