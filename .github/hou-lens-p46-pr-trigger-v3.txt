@@ -1,7 +1,8 @@
 run=30832075911
 attempt=4
-sequence=5
-transport=A-00..A-06
-publisher=v3-pull-request-target
-p47_exact_one_line_quote_patch=true
-base64_sha256=2c4339345d9349267521a5cb0e2292d2aa2437950366b1fd7f8256f0dd87dd70
+sequence=6
+channel=proven-pr-target-v3
+operation=P4.7-exact-one-line-quote-repair
+expected_insertions=1
+expected_deletions=1
+science_access_before_patch=0
