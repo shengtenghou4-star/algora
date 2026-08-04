@@ -1,4 +1,4 @@
-name: HOU-LENS P4.6 comment transport publisher
+name: HOU-LENS P4.7 exact quote repair via default-branch push
 
 on:
   push:
@@ -8,183 +8,55 @@ on:
 
 permissions:
   contents: write
-  issues: read
-  pull-requests: read
 
 jobs:
-  recover-and-publish:
+  exact-one-line-patch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      TARGET_BRANCH: hou-lens-p4-5-scientific-payload
-      PAYLOAD_DIR: .github/hou-lens-p4-5-scientific-payload
-      PR_NUMBER: '11'
-      EXPECTED_RUN_ID: '30832075911'
-      EXPECTED_RUN_ATTEMPT: '3'
-      EXPECTED_HEAD_SHA: 73661d25bbd016e96b7f71847e9b3b20b43a1b5c
-      EXPECTED_B64_BYTES: '114304'
-      EXPECTED_B64_SHA256: d96eccc2f6eb3b7f35497e0ebe67a9def9cd95d902d0f5f0b94ac7d68dca8e1f
-      EXPECTED_CMS_BYTES: '85726'
-      EXPECTED_CMS_SHA256: b09dabae1bccec3497ad9dfcfcd262a6b759006c336b3411d3459f70099d010e
-      EXPECTED_TAR_BYTES: '85062'
-      EXPECTED_TAR_SHA256: 65e28ef98d31b2a4ab37cadf3d923fd458290cc377273ecee2c6d4e30ff9851a
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact scientific execution branch
+        uses: actions/checkout@v4
         with:
-          ref: hou-lens-p4-5-scientific-payload
+          ref: hou-lens-p4-5-single-execution
           fetch-depth: 0
 
-      - name: Recover and verify exact encrypted payload
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
+      - name: Replace and audit the sole malformed line
         run: |
           set -euo pipefail
           python - <<'PY'
-          import base64, hashlib, json, os, pathlib, re, urllib.request, zlib
+          from pathlib import Path
 
-          repo = os.environ['REPOSITORY']
-          token = os.environ['GH_TOKEN']
-          comments = []
-          page = 1
-          while True:
-              req = urllib.request.Request(
-                  f"https://api.github.com/repos/{repo}/issues/{os.environ['PR_NUMBER']}/comments?per_page=100&page={page}",
-                  headers={
-                      'Authorization': f'Bearer {token}',
-                      'Accept': 'application/vnd.github+json',
-                      'X-GitHub-Api-Version': '2022-11-28',
-                      'User-Agent': 'hou-lens-p46-transport',
-                  },
-              )
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  batch = json.load(response)
-              comments.extend(batch)
-              if len(batch) < 100:
-                  break
-              page += 1
-
-          header = re.compile(r'^HOU-LENS-P46-TRANSPORT v1 run=(\d+) attempt=(\d+) replica=A group=(\d+)$')
-          block = re.compile(r'^P(\d{3}) crc32=([0-9a-f]{8}) len=(\d+)$')
-          recovered = {}
-          source_comments = {}
-          for comment in comments:
-              lines = (comment.get('body') or '').splitlines()
-              if not lines:
-                  continue
-              match = header.fullmatch(lines[0].strip())
-              if not match or match.group(1) != os.environ['EXPECTED_RUN_ID'] or match.group(2) != os.environ['EXPECTED_RUN_ATTEMPT']:
-                  continue
-              i = 1
-              while i + 1 < len(lines):
-                  meta = block.fullmatch(lines[i].strip())
-                  if not meta:
-                      i += 1
-                      continue
-                  index = int(meta.group(1))
-                  text = lines[i + 1].strip()
-                  raw = text.encode('ascii')
-                  crc = f'{zlib.crc32(raw) & 0xffffffff:08x}'
-                  if len(raw) == int(meta.group(3)) and crc == meta.group(2):
-                      if index in recovered and recovered[index] != text:
-                          raise SystemExit(f'conflicting transport block {index}')
-                      recovered[index] = text
-                      source_comments[index] = comment['id']
-                  i += 2
-
-          missing = [i for i in range(28) if i not in recovered]
-          if missing:
-              raise SystemExit(f'missing or corrupt transport blocks: {missing}')
-          assembled = ''.join(recovered[i] for i in range(28)).encode('ascii')
-          if len(assembled) != int(os.environ['EXPECTED_B64_BYTES']):
-              raise SystemExit('base64 byte-count mismatch')
-          if hashlib.sha256(assembled).hexdigest() != os.environ['EXPECTED_B64_SHA256']:
-              raise SystemExit('base64 sha256 mismatch')
-          der = base64.b64decode(assembled, validate=True)
-          if len(der) != int(os.environ['EXPECTED_CMS_BYTES']):
-              raise SystemExit('CMS byte-count mismatch')
-          if hashlib.sha256(der).hexdigest() != os.environ['EXPECTED_CMS_SHA256']:
-              raise SystemExit('CMS sha256 mismatch')
-          pathlib.Path('/tmp/payload.b64').write_bytes(assembled)
-          pathlib.Path('/tmp/transport-audit.json').write_text(json.dumps({
-              'schema_version': 1,
-              'status': 'PASS_EXACT_28_BLOCK_COMMENT_TRANSPORT',
-              'run_id': os.environ['EXPECTED_RUN_ID'],
-              'run_attempt': os.environ['EXPECTED_RUN_ATTEMPT'],
-              'block_count': 28,
-              'base64_bytes': len(assembled),
-              'base64_sha256': hashlib.sha256(assembled).hexdigest(),
-              'cms_bytes': len(der),
-              'cms_sha256': hashlib.sha256(der).hexdigest(),
-              'source_comment_ids': source_comments,
-          }, indent=2, sort_keys=True) + '\n')
-          print('PASS_EXACT_28_BLOCK_COMMENT_TRANSPORT')
+          path = Path('.github/workflows/hou-lens-p4-5-single-scientific-execution.yml')
+          lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+          candidates = [
+              index for index, line in enumerate(lines)
+              if 'PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor;' in line
+              and "open('/result/final-gate-import.json','w')" in line
+          ]
+          if len(candidates) != 1:
+              raise SystemExit(f'expected exactly one malformed line, found {candidates}')
+          index = candidates[0]
+          newline = '\n' if lines[index].endswith('\n') else ''
+          replacement = '              PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor; open(\\"/result/final-gate-import.json\\",\\"w\\").write(json.dumps({\\"executor_imported\\":True,\\"executor_module\\":executor.__name__,\\"requests_version\\":requests.__version__},sort_keys=True)+\\"\\\\n\\")"' + newline
+          if "'" in replacement:
+              raise SystemExit('replacement unexpectedly contains a single quote')
+          lines[index] = replacement
+          path.write_text(''.join(lines), encoding='utf-8')
+          updated = path.read_text(encoding='utf-8')
+          if updated.count("open('/result/final-gate-import.json','w')") != 0:
+              raise SystemExit('malformed line remains')
+          if updated.count('open(\\"/result/final-gate-import.json\\",\\"w\\")') != 1:
+              raise SystemExit('corrected line not established exactly once')
           PY
+          git diff --check
+          test "$(git diff --numstat -- .github/workflows/hou-lens-p4-5-single-scientific-execution.yml)" = $'1\t1\t.github/workflows/hou-lens-p4-5-single-scientific-execution.yml'
+          test "$(git diff --name-only)" = '.github/workflows/hou-lens-p4-5-single-scientific-execution.yml'
 
-      - name: Publish four encrypted parts without manifest
+      - name: Commit and push audited P4.7 repair
         run: |
           set -euo pipefail
-          git config user.name 'hou-lens-p46-transport-bot'
-          git config user.email 'hou-lens-p46-transport-bot@users.noreply.github.com'
-          rm -rf "$PAYLOAD_DIR"
-          mkdir -p "$PAYLOAD_DIR"
-          split -b 28576 -d -a 3 /tmp/payload.b64 /tmp/formal-part-
-          python - <<'PY'
-          import pathlib
-          parts = sorted(pathlib.Path('/tmp').glob('formal-part-*'))
-          if len(parts) != 4 or any(p.stat().st_size != 28576 for p in parts):
-              raise SystemExit('formal split mismatch')
-          root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
-          for index, part in enumerate(parts, 1):
-              (root / f'part-{index:03d}.b64').write_bytes(part.read_bytes())
-          PY
-          git add -A "$PAYLOAD_DIR"
-          git commit -m 'Publish P4.6 attempt 3 encrypted payload parts'
-          git push origin "HEAD:$TARGET_BRANCH"
-
-      - name: Publish manifest as the final commit
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import hashlib, json, os, pathlib, subprocess
-          root = pathlib.Path(os.environ['PAYLOAD_DIR'])
-          parts = []
-          for path in sorted(root.glob('part-*.b64')):
-              raw = path.read_bytes()
-              parts.append({
-                  'file': path.name,
-                  'bytes': len(raw),
-                  'sha256': hashlib.sha256(raw).hexdigest(),
-                  'git_blob': subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip(),
-              })
-          if len(parts) != 4 or sum(p['bytes'] for p in parts) != int(os.environ['EXPECTED_B64_BYTES']):
-              raise SystemExit('manifest part-set mismatch')
-          manifest = {
-              'schema_version': 2,
-              'protocol': 'HOU-LENS-P4.5-SINGLE-SCIENTIFIC-EXECUTION',
-              'scientific_execution_payload': True,
-              'run_id': os.environ['EXPECTED_RUN_ID'],
-              'run_attempt': os.environ['EXPECTED_RUN_ATTEMPT'],
-              'executor_head_sha': os.environ['EXPECTED_HEAD_SHA'],
-              'payload_files': [
-                  'P4_1_IMAGE_OBJECT_MANIFEST.csv',
-                  'P4_1_ONE_USE_IMAGE_ACCESS_LOCK.json',
-                  'P4_1_SODA_REQUEST_MANIFEST.csv',
-                  'P4_5_CONTINUATION_CONSUMPTION_RECEIPT.json',
-                  'P4_5_EXECUTION_BINDING.json',
-                  'p4-5-result-recipient-cert.pem',
-              ],
-              'payload_tar_bytes': int(os.environ['EXPECTED_TAR_BYTES']),
-              'payload_tar_sha256': os.environ['EXPECTED_TAR_SHA256'],
-              'cms_der_bytes': int(os.environ['EXPECTED_CMS_BYTES']),
-              'cms_der_sha256': os.environ['EXPECTED_CMS_SHA256'],
-              'base64_bytes': int(os.environ['EXPECTED_B64_BYTES']),
-              'base64_sha256': os.environ['EXPECTED_B64_SHA256'],
-              'parts': parts,
-          }
-          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
-          print(json.dumps(manifest, indent=2, sort_keys=True))
-          PY
-          git add "$PAYLOAD_DIR/manifest.json"
-          git commit -m 'Publish P4.6 attempt 3 manifest last'
-          git push origin "HEAD:$TARGET_BRANCH"
+          git config user.name 'hou-lens-p47-repair-bot'
+          git config user.email 'hou-lens-p47-repair-bot@users.noreply.github.com'
+          git add .github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          git commit -m 'Fix P4.7 offline gate import receipt quoting'
+          git push origin HEAD:hou-lens-p4-5-single-execution
