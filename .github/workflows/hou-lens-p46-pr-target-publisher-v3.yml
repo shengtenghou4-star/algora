@@ -21,14 +21,14 @@ jobs:
       PAYLOAD_DIR: .github/hou-lens-p4-5-scientific-payload
       P46_TRANSPORT_ISSUE: '11'
       EXPECTED_RUN_ID: '30832075911'
-      EXPECTED_RUN_ATTEMPT: '3'
+      EXPECTED_RUN_ATTEMPT: '4'
       EXPECTED_HEAD_SHA: 73661d25bbd016e96b7f71847e9b3b20b43a1b5c
-      EXPECTED_B64_BYTES: '114304'
-      EXPECTED_B64_SHA256: d96eccc2f6eb3b7f35497e0ebe67a9def9cd95d902d0f5f0b94ac7d68dca8e1f
-      EXPECTED_CMS_BYTES: '85726'
-      EXPECTED_CMS_SHA256: b09dabae1bccec3497ad9dfcfcd262a6b759006c336b3411d3459f70099d010e
-      EXPECTED_TAR_BYTES: '85062'
-      EXPECTED_TAR_SHA256: 65e28ef98d31b2a4ab37cadf3d923fd458290cc377273ecee2c6d4e30ff9851a
+      EXPECTED_B64_BYTES: '115156'
+      EXPECTED_B64_SHA256: 2c4339345d9349267521a5cb0e2292d2aa2437950366b1fd7f8256f0dd87dd70
+      EXPECTED_CMS_BYTES: '86366'
+      EXPECTED_CMS_SHA256: a63ee5cc0c0bab7280c077726516f876f933c1c81c31ee440bc5b26430332d7f
+      EXPECTED_TAR_BYTES: '85707'
+      EXPECTED_TAR_SHA256: daff8cf4bd5db235c6f835c252d15b7f12c7ac68a6c2404e17572c46efa23ef8
     steps:
       - name: Checkout frozen control from main
         uses: actions/checkout@v4
@@ -57,18 +57,18 @@ jobs:
           git config user.email 'hou-lens-p46-transport-bot@users.noreply.github.com'
           rm -rf "$PAYLOAD_DIR"
           mkdir -p "$PAYLOAD_DIR"
-          split -b 28576 -d -a 3 /tmp/payload.b64 /tmp/formal-part-
+          split -b 28789 -d -a 3 /tmp/payload.b64 /tmp/formal-part-
           python - <<'PY'
           import pathlib
           parts = sorted(pathlib.Path('/tmp').glob('formal-part-*'))
-          if len(parts) != 4 or any(path.stat().st_size != 28576 for path in parts):
+          if len(parts) != 4 or any(path.stat().st_size != 28789 for path in parts):
               raise SystemExit('formal four-part split mismatch')
           root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
           for index, path in enumerate(parts, 1):
               (root / f'part-{index:03d}.b64').write_bytes(path.read_bytes())
           PY
           git add -A "$PAYLOAD_DIR"
-          git commit -m 'Publish P4.6 attempt 3 encrypted payload parts'
+          git commit -m 'Publish P4.6 attempt 4 encrypted payload parts'
           git push origin "HEAD:$TARGET_BRANCH"
 
       - name: Publish manifest as final commit
@@ -115,5 +115,5 @@ jobs:
           (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
           PY
           git add "$PAYLOAD_DIR/manifest.json"
-          git commit -m 'Publish P4.6 attempt 3 manifest last'
+          git commit -m 'Publish P4.6 attempt 4 manifest last'
           git push origin "HEAD:$TARGET_BRANCH"
