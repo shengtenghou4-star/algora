@@ -1,0 +1,108 @@
+name: HOU-LENS P4.6 PR transport publisher
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/hou-lens-p46-pr-trigger.txt
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: read
+
+jobs:
+  recover-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH: hou-lens-p4-5-scientific-payload
+      PAYLOAD_DIR: .github/hou-lens-p4-5-scientific-payload
+      P46_TRANSPORT_ISSUE: '11'
+      EXPECTED_RUN_ID: '30832075911'
+      EXPECTED_RUN_ATTEMPT: '3'
+      EXPECTED_HEAD_SHA: 73661d25bbd016e96b7f71847e9b3b20b43a1b5c
+      EXPECTED_B64_BYTES: '114304'
+      EXPECTED_B64_SHA256: d96eccc2f6eb3b7f35497e0ebe67a9def9cd95d902d0f5f0b94ac7d68dca8e1f
+      EXPECTED_CMS_BYTES: '85726'
+      EXPECTED_CMS_SHA256: b09dabae1bccec3497ad9dfcfcd262a6b759006c336b3411d3459f70099d010e
+      EXPECTED_TAR_BYTES: '85062'
+      EXPECTED_TAR_SHA256: 65e28ef98d31b2a4ab37cadf3d923fd458290cc377273ecee2c6d4e30ff9851a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hou-lens-p4-5-scientific-payload
+          fetch-depth: 0
+
+      - name: Recover and verify encrypted payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python "$GITHUB_WORKSPACE/scripts/hou_lens_p46_publish_transport.py"
+
+      - name: Publish four encrypted parts without manifest
+        run: |
+          set -euo pipefail
+          git config user.name 'hou-lens-p46-transport-bot'
+          git config user.email 'hou-lens-p46-transport-bot@users.noreply.github.com'
+          rm -rf "$PAYLOAD_DIR"
+          mkdir -p "$PAYLOAD_DIR"
+          split -b 28576 -d -a 3 /tmp/payload.b64 /tmp/formal-part-
+          python - <<'PY'
+          import pathlib
+          parts = sorted(pathlib.Path('/tmp').glob('formal-part-*'))
+          if len(parts) != 4 or any(path.stat().st_size != 28576 for path in parts):
+              raise SystemExit('formal four-part split mismatch')
+          root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
+          for index, path in enumerate(parts, 1):
+              (root / f'part-{index:03d}.b64').write_bytes(path.read_bytes())
+          PY
+          git add -A "$PAYLOAD_DIR"
+          git commit -m 'Publish P4.6 attempt 3 encrypted payload parts'
+          git push origin "HEAD:$TARGET_BRANCH"
+
+      - name: Publish manifest as final commit
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['PAYLOAD_DIR'])
+          parts = []
+          for path in sorted(root.glob('part-*.b64')):
+              raw = path.read_bytes()
+              parts.append({
+                  'file': path.name,
+                  'bytes': len(raw),
+                  'sha256': hashlib.sha256(raw).hexdigest(),
+                  'git_blob': subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip(),
+              })
+          if len(parts) != 4 or sum(row['bytes'] for row in parts) != int(os.environ['EXPECTED_B64_BYTES']):
+              raise SystemExit('manifest part-set mismatch')
+          manifest = {
+              'schema_version': 2,
+              'protocol': 'HOU-LENS-P4.5-SINGLE-SCIENTIFIC-EXECUTION',
+              'scientific_execution_payload': True,
+              'run_id': os.environ['EXPECTED_RUN_ID'],
+              'run_attempt': os.environ['EXPECTED_RUN_ATTEMPT'],
+              'executor_head_sha': os.environ['EXPECTED_HEAD_SHA'],
+              'payload_files': [
+                  'P4_1_IMAGE_OBJECT_MANIFEST.csv',
+                  'P4_1_ONE_USE_IMAGE_ACCESS_LOCK.json',
+                  'P4_1_SODA_REQUEST_MANIFEST.csv',
+                  'P4_5_CONTINUATION_CONSUMPTION_RECEIPT.json',
+                  'P4_5_EXECUTION_BINDING.json',
+                  'p4-5-result-recipient-cert.pem',
+              ],
+              'payload_tar_bytes': int(os.environ['EXPECTED_TAR_BYTES']),
+              'payload_tar_sha256': os.environ['EXPECTED_TAR_SHA256'],
+              'cms_der_bytes': int(os.environ['EXPECTED_CMS_BYTES']),
+              'cms_der_sha256': os.environ['EXPECTED_CMS_SHA256'],
+              'base64_bytes': int(os.environ['EXPECTED_B64_BYTES']),
+              'base64_sha256': os.environ['EXPECTED_B64_SHA256'],
+              'parts': parts,
+          }
+          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+          PY
+          git add "$PAYLOAD_DIR/manifest.json"
+          git commit -m 'Publish P4.6 attempt 3 manifest last'
+          git push origin "HEAD:$TARGET_BRANCH"
