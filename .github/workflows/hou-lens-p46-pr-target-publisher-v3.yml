@@ -1,4 +1,4 @@
-name: HOU-LENS P4.6 PR-target transport publisher v3
+name: HOU-LENS P4.7 exact quote repair through proven PR-target channel
 
 on:
   pull_request_target:
@@ -9,111 +9,58 @@ on:
 
 permissions:
   contents: write
-  issues: read
-  pull-requests: read
 
 jobs:
-  recover-and-publish:
+  exact-one-line-patch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      TARGET_BRANCH: hou-lens-p4-5-scientific-payload
-      PAYLOAD_DIR: .github/hou-lens-p4-5-scientific-payload
-      P46_TRANSPORT_ISSUE: '11'
-      EXPECTED_RUN_ID: '30832075911'
-      EXPECTED_RUN_ATTEMPT: '4'
-      EXPECTED_HEAD_SHA: 73661d25bbd016e96b7f71847e9b3b20b43a1b5c
-      EXPECTED_B64_BYTES: '115156'
-      EXPECTED_B64_SHA256: 2c4339345d9349267521a5cb0e2292d2aa2437950366b1fd7f8256f0dd87dd70
-      EXPECTED_CMS_BYTES: '86366'
-      EXPECTED_CMS_SHA256: a63ee5cc0c0bab7280c077726516f876f933c1c81c31ee440bc5b26430332d7f
-      EXPECTED_TAR_BYTES: '85707'
-      EXPECTED_TAR_SHA256: daff8cf4bd5db235c6f835c252d15b7f12c7ac68a6c2404e17572c46efa23ef8
+    timeout-minutes: 5
     steps:
-      - name: Checkout frozen control from main
+      - name: Checkout exact scientific execution branch
         uses: actions/checkout@v4
         with:
-          ref: main
-          path: control
-          persist-credentials: false
-
-      - name: Checkout payload branch with write credentials
-        uses: actions/checkout@v4
-        with:
-          ref: hou-lens-p4-5-scientific-payload
-          path: payload
+          ref: hou-lens-p4-5-single-execution
+          path: target
           fetch-depth: 0
 
-      - name: Recover and verify encrypted payload
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python control/scripts/hou_lens_p46_publish_transport.py
-
-      - name: Publish four encrypted parts without manifest
-        working-directory: payload
-        run: |
-          set -euo pipefail
-          git config user.name 'hou-lens-p46-transport-bot'
-          git config user.email 'hou-lens-p46-transport-bot@users.noreply.github.com'
-          rm -rf "$PAYLOAD_DIR"
-          mkdir -p "$PAYLOAD_DIR"
-          split -b 28789 -d -a 3 /tmp/payload.b64 /tmp/formal-part-
-          python - <<'PY'
-          import pathlib
-          parts = sorted(pathlib.Path('/tmp').glob('formal-part-*'))
-          if len(parts) != 4 or any(path.stat().st_size != 28789 for path in parts):
-              raise SystemExit('formal four-part split mismatch')
-          root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
-          for index, path in enumerate(parts, 1):
-              (root / f'part-{index:03d}.b64').write_bytes(path.read_bytes())
-          PY
-          git add -A "$PAYLOAD_DIR"
-          git commit -m 'Publish P4.6 attempt 4 encrypted payload parts'
-          git push origin "HEAD:$TARGET_BRANCH"
-
-      - name: Publish manifest as final commit
-        working-directory: payload
+      - name: Replace and audit the sole malformed line
+        working-directory: target
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, json, os, pathlib, subprocess
-          root = pathlib.Path(os.environ['PAYLOAD_DIR'])
-          parts = []
-          for path in sorted(root.glob('part-*.b64')):
-              raw = path.read_bytes()
-              parts.append({
-                  'file': path.name,
-                  'bytes': len(raw),
-                  'sha256': hashlib.sha256(raw).hexdigest(),
-                  'git_blob': subprocess.check_output(['git', 'hash-object', '--stdin'], input=raw).decode().strip(),
-              })
-          if len(parts) != 4 or sum(row['bytes'] for row in parts) != int(os.environ['EXPECTED_B64_BYTES']):
-              raise SystemExit('manifest part-set mismatch')
-          manifest = {
-              'schema_version': 2,
-              'protocol': 'HOU-LENS-P4.5-SINGLE-SCIENTIFIC-EXECUTION',
-              'scientific_execution_payload': True,
-              'run_id': os.environ['EXPECTED_RUN_ID'],
-              'run_attempt': os.environ['EXPECTED_RUN_ATTEMPT'],
-              'executor_head_sha': os.environ['EXPECTED_HEAD_SHA'],
-              'payload_files': [
-                  'P4_1_IMAGE_OBJECT_MANIFEST.csv',
-                  'P4_1_ONE_USE_IMAGE_ACCESS_LOCK.json',
-                  'P4_1_SODA_REQUEST_MANIFEST.csv',
-                  'P4_5_CONTINUATION_CONSUMPTION_RECEIPT.json',
-                  'P4_5_EXECUTION_BINDING.json',
-                  'p4-5-result-recipient-cert.pem',
-              ],
-              'payload_tar_bytes': int(os.environ['EXPECTED_TAR_BYTES']),
-              'payload_tar_sha256': os.environ['EXPECTED_TAR_SHA256'],
-              'cms_der_bytes': int(os.environ['EXPECTED_CMS_BYTES']),
-              'cms_der_sha256': os.environ['EXPECTED_CMS_SHA256'],
-              'base64_bytes': int(os.environ['EXPECTED_B64_BYTES']),
-              'base64_sha256': os.environ['EXPECTED_B64_SHA256'],
-              'parts': parts,
-          }
-          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+          from pathlib import Path
+
+          path = Path('.github/workflows/hou-lens-p4-5-single-scientific-execution.yml')
+          lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+          candidates = [
+              index for index, line in enumerate(lines)
+              if 'PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor;' in line
+              and "open('/result/final-gate-import.json','w')" in line
+          ]
+          if len(candidates) != 1:
+              raise SystemExit(f'expected exactly one malformed line, found {candidates}')
+          index = candidates[0]
+          newline = '\n' if lines[index].endswith('\n') else ''
+          replacement = '              PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor; open(\\"/result/final-gate-import.json\\",\\"w\\").write(json.dumps({\\"executor_imported\\":True,\\"executor_module\\":executor.__name__,\\"requests_version\\":requests.__version__},sort_keys=True)+\\"\\\\n\\")"' + newline
+          if "'" in replacement:
+              raise SystemExit('replacement unexpectedly contains a single quote')
+          lines[index] = replacement
+          path.write_text(''.join(lines), encoding='utf-8')
+          updated = path.read_text(encoding='utf-8')
+          if updated.count("open('/result/final-gate-import.json','w')") != 0:
+              raise SystemExit('malformed line remains')
+          if updated.count('open(\\"/result/final-gate-import.json\\",\\"w\\")') != 1:
+              raise SystemExit('corrected line not established exactly once')
           PY
-          git add "$PAYLOAD_DIR/manifest.json"
-          git commit -m 'Publish P4.6 attempt 4 manifest last'
-          git push origin "HEAD:$TARGET_BRANCH"
+          git diff --check
+          test "$(git diff --numstat -- .github/workflows/hou-lens-p4-5-single-scientific-execution.yml)" = $'1\t1\t.github/workflows/hou-lens-p4-5-single-scientific-execution.yml'
+          test "$(git diff --name-only)" = '.github/workflows/hou-lens-p4-5-single-scientific-execution.yml'
+
+      - name: Commit and push audited P4.7 repair
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git config user.name 'hou-lens-p47-repair-bot'
+          git config user.email 'hou-lens-p47-repair-bot@users.noreply.github.com'
+          git add .github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          git commit -m 'Fix P4.7 offline gate import receipt quoting'
+          git push origin HEAD:hou-lens-p4-5-single-execution
