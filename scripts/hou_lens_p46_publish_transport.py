@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recover the exact P4.6 attempt-3 CMS payload from authenticated PR comments.
+"""Recover the exact P4.6 attempt-4 CMS payload from authenticated PR comments.
 
 This script handles encrypted transport bytes only. It verifies per-block CRC32 and
 full Base64/CMS hashes before writing /tmp/payload.b64. It never decrypts the
@@ -18,11 +18,11 @@ import urllib.request
 import zlib
 
 EXPECTED_RUN_ID = "30832075911"
-EXPECTED_RUN_ATTEMPT = "3"
-EXPECTED_B64_BYTES = 114_304
-EXPECTED_B64_SHA256 = "d96eccc2f6eb3b7f35497e0ebe67a9def9cd95d902d0f5f0b94ac7d68dca8e1f"
-EXPECTED_CMS_BYTES = 85_726
-EXPECTED_CMS_SHA256 = "b09dabae1bccec3497ad9dfcfcd262a6b759006c336b3411d3459f70099d010e"
+EXPECTED_RUN_ATTEMPT = "4"
+EXPECTED_B64_BYTES = 115_156
+EXPECTED_B64_SHA256 = "2c4339345d9349267521a5cb0e2292d2aa2437950366b1fd7f8256f0dd87dd70"
+EXPECTED_CMS_BYTES = 86_366
+EXPECTED_CMS_SHA256 = "a63ee5cc0c0bab7280c077726516f876f933c1c81c31ee440bc5b26430332d7f"
 EXPECTED_BLOCK_COUNT = 28
 HEADER = re.compile(
     r"^HOU-LENS-P46-TRANSPORT v1 run=(\d+) attempt=(\d+) replica=A group=(\d+)$"
