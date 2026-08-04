@@ -1,5 +1,8 @@
-run=30832075911
-attempt=3
-sequence=1
-transport=A-00..A-06
-base64_sha256=d96eccc2f6eb3b7f35497e0ebe67a9def9cd95d902d0f5f0b94ac7d68dca8e1f
+protocol=P4.7
+sequence=2
+channel=default-branch-push
+operation=exact-one-line-shell-quoting-repair
+target_branch=hou-lens-p4-5-single-execution
+expected_insertions=1
+expected_deletions=1
+science_access_before_patch=0
