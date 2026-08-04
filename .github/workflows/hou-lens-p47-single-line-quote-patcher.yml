@@ -1,0 +1,66 @@
+name: HOU-LENS P4.7 exact single-line quote patcher
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/hou-lens-p47-quote-patch-trigger.txt
+
+permissions:
+  contents: write
+
+jobs:
+  exact-one-line-patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact scientific execution branch
+        uses: actions/checkout@v4
+        with:
+          ref: hou-lens-p4-5-single-execution
+          path: target
+          fetch-depth: 0
+
+      - name: Replace only the malformed import-receipt line
+        working-directory: target
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/hou-lens-p4-5-single-scientific-execution.yml')
+          lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+          candidates = [
+              index for index, line in enumerate(lines)
+              if 'PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor;' in line
+              and "open('/result/final-gate-import.json','w')" in line
+          ]
+          if candidates != [next(iter(candidates), -1)] or len(candidates) != 1:
+              raise SystemExit(f'expected exactly one malformed line, found {candidates}')
+          index = candidates[0]
+          newline = '\n' if lines[index].endswith('\n') else ''
+          replacement = '              PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor; open(\\"/result/final-gate-import.json\\",\\"w\\").write(json.dumps({\\"executor_imported\\":True,\\"executor_module\\":executor.__name__,\\"requests_version\\":requests.__version__},sort_keys=True)+\\"\\\\n\\")"' + newline
+          if "'" in replacement:
+              raise SystemExit('replacement unexpectedly contains a single quote')
+          lines[index] = replacement
+          path.write_text(''.join(lines), encoding='utf-8')
+          updated = path.read_text(encoding='utf-8')
+          if updated.count('final-gate-import.json') != 2:
+              raise SystemExit('unexpected final-gate-import reference count')
+          if updated.count('open(\\"/result/final-gate-import.json\\",\\"w\\")') != 1:
+              raise SystemExit('corrected import-receipt command not established exactly once')
+          PY
+          git diff --check
+          test "$(git diff --numstat -- .github/workflows/hou-lens-p4-5-single-scientific-execution.yml)" = $'1\t1\t.github/workflows/hou-lens-p4-5-single-scientific-execution.yml'
+          test "$(git diff --name-only)" = '.github/workflows/hou-lens-p4-5-single-scientific-execution.yml'
+
+      - name: Commit and push audited P4.7 repair
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git config user.name 'hou-lens-p47-repair-bot'
+          git config user.email 'hou-lens-p47-repair-bot@users.noreply.github.com'
+          git add .github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          git commit -m 'Fix P4.7 offline gate import receipt quoting'
+          git push origin HEAD:hou-lens-p4-5-single-execution
