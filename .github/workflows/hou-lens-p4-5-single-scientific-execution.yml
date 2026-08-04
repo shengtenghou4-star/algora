@@ -309,7 +309,7 @@ jobs:
               cd /work
               PYTHONPATH=src python -m py_compile scripts/v3_execute_p4_1_locked_images.py
               PYTHONPATH=src:. pytest -q -p no:cacheprovider --junitxml=/result/final-gate-junit.xml tests/test_p4_image_acquisition.py tests/test_p4_soda_manifest.py >/result/final-gate-pytest.txt
-              PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor; open('/result/final-gate-import.json','w').write(json.dumps({'executor_imported':True,'executor_module':executor.__name__,'requests_version':requests.__version__},sort_keys=True)+'\\n')"
+              PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor; open(\"/result/final-gate-import.json\",\"w\").write(json.dumps({\"executor_imported\":True,\"executor_module\":executor.__name__,\"requests_version\":requests.__version__},sort_keys=True)+\"\\n\")"
             '
           python - <<'PY'
           import json, pathlib, xml.etree.ElementTree as ET
