@@ -1,0 +1,7 @@
+protocol=P4.7
+scope=exact-one-line-shell-quoting-repair
+target_branch=hou-lens-p4-5-single-execution
+target_path=.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+expected_insertions=1
+expected_deletions=1
+science_access_before_patch=0
