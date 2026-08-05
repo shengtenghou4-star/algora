@@ -20,17 +20,17 @@ jobs:
       TARGET_BRANCH: hou-lens-p4-5-scientific-payload
       PAYLOAD_DIR: .github/hou-lens-p4-5-scientific-payload
       P46_TRANSPORT_ISSUE: '11'
-      EXPECTED_RUN_ID: '30917990481'
-      EXPECTED_RUN_ATTEMPT: '3'
-      EXPECTED_HEAD_SHA: 6020a42aadc1e4a1a92b74c3b41c2375d1d857a0
+      EXPECTED_RUN_ID: '31007861910'
+      EXPECTED_RUN_ATTEMPT: '1'
+      EXPECTED_HEAD_SHA: d848867710b63213886f5f368af6e9569c410d33
       EXPECTED_BLOCK_COUNT: '28'
-      EXPECTED_B64_BYTES: '116504'
-      EXPECTED_B64_SHA256: 43a89eab3e85559931517216069438d0bfb84e9dd934de983ffe3ac910a1621e
-      EXPECTED_CMS_BYTES: '87378'
-      EXPECTED_CMS_SHA256: 73af92ce72a8cfa8e7328755b3aad9002bd87843d4d7e5175422d30d97055979
-      EXPECTED_TAR_BYTES: '86712'
-      EXPECTED_TAR_SHA256: 0f1c5b1fced5f8673a1c34b42f2e47c4cf983b26b4cc17e1a13192fb37e73b74
-      PART_BYTES: '29126'
+      EXPECTED_B64_BYTES: '116272'
+      EXPECTED_B64_SHA256: e595670f707ae5c17a1cfddf5d859cb497d9d1fc6c1fc89169ae00d7ebac1643
+      EXPECTED_CMS_BYTES: '87202'
+      EXPECTED_CMS_SHA256: d8067e9c41916e0229f402193669004d2931de2dfeb22eed2ac43bfe9bc3ab99
+      EXPECTED_TAR_BYTES: '86530'
+      EXPECTED_TAR_SHA256: 73089281c7c91a54bdc47f02b78c2d0713f2e929d40aaafb24848203dec002f0
+      PART_BYTES: '29068'
     steps:
       - name: Checkout transport control from main
         uses: actions/checkout@v4
@@ -71,7 +71,7 @@ jobs:
               (root / f'part-{index:03d}.b64').write_bytes(path.read_bytes())
           PY
           git add -A "$PAYLOAD_DIR"
-          git commit -m 'Publish run 30917990481 attempt 3 encrypted payload parts'
+          git commit -m 'Publish run 31007861910 attempt 1 encrypted payload parts'
           git push origin "HEAD:$TARGET_BRANCH"
 
       - name: Publish manifest as final commit
@@ -118,5 +118,5 @@ jobs:
           (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
           PY
           git add "$PAYLOAD_DIR/manifest.json"
-          git commit -m 'Publish run 30917990481 attempt 3 manifest last'
+          git commit -m 'Publish run 31007861910 attempt 1 manifest last'
           git push origin "HEAD:$TARGET_BRANCH"
