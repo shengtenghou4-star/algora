@@ -1,0 +1,36 @@
+name: HOU-LENS P4.5 current payload publisher wrapper
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.head_ref == 'hou-lens-p45-current-payload-publisher'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout publisher control from main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: control
+          persist-credentials: false
+
+      - name: Checkout payload branch with write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: hou-lens-p4-5-scientific-payload
+          path: payload
+          fetch-depth: 0
+
+      - name: Publish exact encrypted payload, manifest last
+        env:
+          PAYLOAD_REPO: ${{ github.workspace }}/payload
+        run: |
+          set -euo pipefail
+          python control/scripts/hou_lens_p45_publish_current_payload.py
