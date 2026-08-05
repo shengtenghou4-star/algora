@@ -16,11 +16,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Checkout exact scientific source
+      - name: Checkout exact scientific source carrier
         uses: actions/checkout@v4
         with:
           ref: d848867710b63213886f5f368af6e9569c410d33
-          path: source
+          path: carrier
 
       - name: Download reuploaded base runtime
         uses: actions/download-artifact@v4
@@ -40,10 +40,16 @@ jobs:
           run-id: 30808837306
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore exact original base wheel identity
+      - name: Restore and verify all exact public inputs
         run: |
           set -euo pipefail
-          mkdir -p /tmp/result /tmp/patch
+          mkdir -p /tmp/result /tmp/patch /tmp/executor-source
+
+          base64 -d carrier/.github/hou-lens-p4-5-execution/source.tar.gz.b64 > /tmp/source.tar.gz
+          test "$(sha256sum /tmp/source.tar.gz | cut -d' ' -f1)" = 'e4bf0b14e0c3b7ec1b8b119eb49140c5bfa746813e9132ca957aba5a92515944'
+          tar -xzf /tmp/source.tar.gz -C /tmp/executor-source
+          test "$(git hash-object /tmp/executor-source/scripts/v3_execute_p4_1_locked_images.py)" = '26f9a7ed5529a98911a5d948e365eae611a0af8b'
+
           test "$(sha256sum /tmp/runtime/requirements.in | cut -d' ' -f1)" = '525c2473112c887e2be57fdb6d7f048b32c30dabf6fe3e118991fa8fe7838ee1'
           rm -f /tmp/runtime/wheels/astropy_iers_data-*.whl /tmp/runtime/wheels/packaging-*.whl
           curl --fail --location --retry 3 --output /tmp/runtime/wheels/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl 'https://files.pythonhosted.org/packages/7b/02/df236615164fbd2fd29b04b5c44ff24949272612ccc84347071a074e0ce0/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl'
@@ -67,9 +73,6 @@ jobs:
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -czf /tmp/runtime/wheels.tar.gz -C /tmp/runtime wheels
           test "$(sha256sum /tmp/runtime/wheels.tar.gz | cut -d' ' -f1)" = '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1'
 
-      - name: Verify exact Requests patch identities
-        run: |
-          set -euo pipefail
           test "$(sha256sum /tmp/patch-artifact/p4-5-requests-runtime-patch.tar.gz | cut -d' ' -f1)" = 'b045abf18df056e99fa2aa47219136b18f2b3f115fcd3db9336d1b1ebabda28a'
           test "$(sha256sum /tmp/patch-artifact/p4-5-requests-runtime-patch-receipt.json | cut -d' ' -f1)" = '63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91'
           tar -xzf /tmp/patch-artifact/p4-5-requests-runtime-patch.tar.gz -C /tmp/patch
@@ -81,7 +84,7 @@ jobs:
           set -euo pipefail
           IMAGE='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
           docker pull "$IMAGE" >/dev/null
-          docker run --rm --network none -v "$GITHUB_WORKSPACE/source:/work:ro" -v /tmp/runtime:/runtime:ro -v /tmp/patch:/patch:ro -v /tmp/result:/result "$IMAGE" sh -lc '
+          docker run --rm --network none -v /tmp/executor-source:/work:ro -v /tmp/runtime:/runtime:ro -v /tmp/patch:/patch:ro -v /tmp/result:/result "$IMAGE" sh -lc '
             set -eux
             export PYTHONPYCACHEPREFIX=/result/preflight-pycache
             mkdir -p "$PYTHONPYCACHEPREFIX"
@@ -111,10 +114,11 @@ jobs:
           if imported != expected_import:
               raise SystemExit(f'final executor import gate failed: {imported}')
           receipt = {
-              'schema_version': 1,
+              'schema_version': 2,
               'status': 'PASS_EXACT_OFFLINE_GATE_DIAGNOSTIC',
               'scientific_source_head': 'd848867710b63213886f5f368af6e9569c410d33',
-              'requests_patch_tar_sha256': 'b045abf18df056e99fa2aa47219136b18f2b3f115fcd3db9336d1b1ebabda28a',
+              'source_tar_sha256': 'e4bf0b14e0c3b7ec1b8b119eb49140c5bfa746813e9132ca957aba5a92515944',
+              'executor_git_blob': '26f9a7ed5529a98911a5d948e365eae611a0af8b',
               'requests_patch_receipt_sha256': '63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91',
               'requests_closure_sha256': 'a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497',
               'test_counts': counts,
