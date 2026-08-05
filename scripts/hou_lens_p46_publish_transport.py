@@ -13,12 +13,13 @@ import zlib
 
 RUN_ID = os.environ["EXPECTED_RUN_ID"]
 RUN_ATTEMPT = os.environ["EXPECTED_RUN_ATTEMPT"]
+REPLICA = os.environ.get("EXPECTED_REPLICA", "A")
 B64_BYTES = int(os.environ["EXPECTED_B64_BYTES"])
 B64_SHA256 = os.environ["EXPECTED_B64_SHA256"]
 CMS_BYTES = int(os.environ["EXPECTED_CMS_BYTES"])
 CMS_SHA256 = os.environ["EXPECTED_CMS_SHA256"]
 BLOCK_COUNT = int(os.environ.get("EXPECTED_BLOCK_COUNT", "28"))
-HEADER = re.compile(r"^HOU-LENS-P46-TRANSPORT v1 run=(\d+) attempt=(\d+) replica=A group=(\d+)$")
+HEADER = re.compile(r"^HOU-LENS-P46-TRANSPORT v1 run=(\d+) attempt=(\d+) replica=([A-Z]) group=(\d+)$")
 BLOCK = re.compile(r"^P(\d{3}) crc32=([0-9a-f]{8}) len=(\d+)$")
 
 
@@ -55,7 +56,12 @@ def main() -> None:
         if not lines:
             continue
         header = HEADER.fullmatch(lines[0].strip())
-        if not header or header.group(1) != RUN_ID or header.group(2) != RUN_ATTEMPT:
+        if (
+            not header
+            or header.group(1) != RUN_ID
+            or header.group(2) != RUN_ATTEMPT
+            or header.group(3) != REPLICA
+        ):
             continue
         cursor = 1
         while cursor + 1 < len(lines):
@@ -85,10 +91,11 @@ def main() -> None:
         raise SystemExit("CMS DER identity mismatch")
     Path("/tmp/payload.b64").write_bytes(assembled)
     Path("/tmp/p46-transport-audit.json").write_text(json.dumps({
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "PASS_EXACT_COMMENT_TRANSPORT",
         "run_id": RUN_ID,
         "run_attempt": RUN_ATTEMPT,
+        "replica": REPLICA,
         "block_count": BLOCK_COUNT,
         "base64_bytes": len(assembled),
         "base64_sha256": hashlib.sha256(assembled).hexdigest(),
