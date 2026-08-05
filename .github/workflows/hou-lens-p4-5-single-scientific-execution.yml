@@ -352,12 +352,12 @@ jobs:
           PATCH_RECEIPT_SHA="$(sha256sum /tmp/patch-artifact/p4-5-requests-runtime-patch-receipt.json | cut -d' ' -f1)"
           case "$PATCH_TAR_SHA:$PATCH_RECEIPT_SHA" in
             a8160b489191039c5f2be23be741c12e02323099d7d9f00ca9c62324f94e4f5b:01169787e45dea3f370a6ca7d789167770cf3b547b0cfd736b9b77ebce9d598a) ;;
-            b045abf18df056e99fa2aa47219136b18f2b3f115fcd3db9336d1b1ebabda28a:63a1f6ffda021310f8da34b4d7028ec15cd1abc8d75ba6fd753320df54be90a8) ;;
+            b045abf18df056e99fa2aa47219136b18f2b3f115fcd3db9336d1b1ebabda28a:63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91) ;;
             *) echo "unrecognized Requests patch wrapper identity" >&2; exit 1 ;;
           esac
           tar -xzf /tmp/patch-artifact/p4-5-requests-runtime-patch.tar.gz -C /tmp/patch
           test "$(sha256sum /tmp/patch/requests-wheel-manifest.sha256 | cut -d' ' -f1)" = '952a86e2842f5f4cfb35de196fa8587af949a6732a57edf8a2c43be96665d3d3'
-          test "$(sha256sum /tmp/patch/p4_5_requests_runtime_closure.json | cut -d' ' -f1)" = 'a92ef67259db37906756b52b7d098bc7c5093afcfef6904819ed64f44bf2e8aa'
+          test "$(sha256sum /tmp/patch/p4_5_requests_runtime_closure.json | cut -d' ' -f1)" = 'a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497'
           python - "$PATCH_TAR_SHA" "$PATCH_RECEIPT_SHA" <<'PY'
           import json, pathlib, sys
           pathlib.Path('/tmp/result/requests-patch-wrapper.json').write_text(json.dumps({
@@ -368,7 +368,7 @@ jobs:
               'patch_tar_sha256': sys.argv[1],
               'patch_receipt_sha256': sys.argv[2],
               'inner_wheel_manifest_sha256': '952a86e2842f5f4cfb35de196fa8587af949a6732a57edf8a2c43be96665d3d3',
-              'closure_sha256': 'a92ef67259db37906756b52b7d098bc7c5093afcfef6904819ed64f44bf2e8aa',
+              'closure_sha256': 'a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497',
               'soda_requests_sent': 0,
               'image_bytes_downloaded': 0,
               'scores_computed': False,
