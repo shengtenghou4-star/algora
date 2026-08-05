@@ -8,7 +8,7 @@ on:
       - .github/hou-lens-p45-runtime-recovery-trigger.txt
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   patch-scientific-workflow:
@@ -28,9 +28,8 @@ jobs:
           ref: hou-lens-p4-5-single-execution
           path: target
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Apply exact runtime recovery patch
+      - name: Apply and validate exact runtime recovery patch
         run: |
           set -euo pipefail
           python control/scripts/hou_lens_p45_patch_runtime_recovery.py \
@@ -49,3 +48,18 @@ jobs:
           retention-days: 2
           compression-level: 0
           if-no-files-found: error
+
+      - name: Stage validated workflow blob on scientific branch
+        working-directory: target
+        run: |
+          set -euo pipefail
+          mkdir -p staged/hou-lens-p45-runtime-recovery
+          cp .github/workflows/hou-lens-p4-5-single-scientific-execution.yml \
+            staged/hou-lens-p45-runtime-recovery/hou-lens-p4-5-single-scientific-execution.yml
+          git checkout -- .github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          test -z "$(git diff --name-only -- .github/workflows/hou-lens-p4-5-single-scientific-execution.yml)"
+          git config user.name 'hou-lens-runtime-recovery-bot'
+          git config user.email 'hou-lens-runtime-recovery-bot@users.noreply.github.com'
+          git add staged/hou-lens-p45-runtime-recovery/hou-lens-p4-5-single-scientific-execution.yml
+          git commit -m 'Stage validated exact P4.5 runtime recovery workflow blob'
+          git push origin HEAD:hou-lens-p4-5-single-execution
