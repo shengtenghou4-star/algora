@@ -82,13 +82,12 @@ jobs:
           mkdir -p /tmp/result
           test "$(sha256sum /tmp/runtime/requirements.in | cut -d' ' -f1)" = '525c2473112c887e2be57fdb6d7f048b32c30dabf6fe3e118991fa8fe7838ee1'
           rm -f /tmp/runtime/wheels/astropy_iers_data-*.whl /tmp/runtime/wheels/packaging-*.whl
-          IMAGE='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
-          docker pull "$IMAGE" >/dev/null
-          docker run --rm -v /tmp/runtime/wheels:/w "$IMAGE" sh -lc '
-            set -eu
-            python -m pip download --disable-pip-version-check --no-deps --only-binary=:all: --dest /w \
-              astropy-iers-data==0.2026.7.27.0.56.29 packaging==26.2 >/dev/null
-          '
+          curl --fail --location --retry 3 \
+            --output /tmp/runtime/wheels/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl \
+            'https://files.pythonhosted.org/packages/7b/02/df236615164fbd2fd29b04b5c44ff24949272612ccc84347071a074e0ce0/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl'
+          curl --fail --location --retry 3 \
+            --output /tmp/runtime/wheels/packaging-26.2-py3-none-any.whl \
+            'https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl'
           test "$(sha256sum /tmp/runtime/wheels/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl | cut -d' ' -f1)" = '8106cce07e38e3e0422f755b8964e6d03ca4d4280bb134934c74d497711f8d2a'
           test "$(sha256sum /tmp/runtime/wheels/packaging-26.2-py3-none-any.whl | cut -d' ' -f1)" = '5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e'
           cat > /tmp/runtime/requirements.freeze <<'EOF'
@@ -116,6 +115,8 @@ jobs:
               'schema_version': 1,
               'stage': 'p4_5_exact_runtime_recovery_after_artifact_expiry',
               'status': 'PASS_RESTORED_ORIGINAL_FROZEN_WHEEL_IDENTITY',
+              'recovery_transport': 'immutable_files_pythonhosted_content_address',
+              'cdn_diagnostic_run_id': 31007161254,
               'source_run_id': 30734422166,
               'expired_original_artifact_id': 8829046472,
               'reupload_artifact_id': 8929087724,
