@@ -1,0 +1,137 @@
+name: HOU-LENS P4.5 final offline gate diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/hou-lens-p45-offline-gate-diagnostic-trigger.txt
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  exact-offline-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact scientific source
+        uses: actions/checkout@v4
+        with:
+          ref: d848867710b63213886f5f368af6e9569c410d33
+          path: source
+
+      - name: Download reuploaded base runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: hou-lens-p4-1-runtime-30734422166
+          path: /tmp/runtime
+          repository: shengtenghou4-star/algora
+          run-id: 30734422166
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download reuploaded Requests patch
+        uses: actions/download-artifact@v4
+        with:
+          name: hou-lens-p4-5-requests-runtime-patch-30808837306
+          path: /tmp/patch-artifact
+          repository: shengtenghou4-star/algora
+          run-id: 30808837306
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore exact original base wheel identity
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/result /tmp/patch
+          test "$(sha256sum /tmp/runtime/requirements.in | cut -d' ' -f1)" = '525c2473112c887e2be57fdb6d7f048b32c30dabf6fe3e118991fa8fe7838ee1'
+          rm -f /tmp/runtime/wheels/astropy_iers_data-*.whl /tmp/runtime/wheels/packaging-*.whl
+          curl --fail --location --retry 3 --output /tmp/runtime/wheels/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl 'https://files.pythonhosted.org/packages/7b/02/df236615164fbd2fd29b04b5c44ff24949272612ccc84347071a074e0ce0/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl'
+          curl --fail --location --retry 3 --output /tmp/runtime/wheels/packaging-26.2-py3-none-any.whl 'https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl'
+          test "$(sha256sum /tmp/runtime/wheels/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl | cut -d' ' -f1)" = '8106cce07e38e3e0422f755b8964e6d03ca4d4280bb134934c74d497711f8d2a'
+          test "$(sha256sum /tmp/runtime/wheels/packaging-26.2-py3-none-any.whl | cut -d' ' -f1)" = '5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e'
+          cat > /tmp/runtime/requirements.freeze <<'EOF'
+          PyYAML==6.0.3
+          astropy-iers-data==0.2026.7.27.0.56.29
+          astropy==6.0.1
+          iniconfig==2.3.0
+          numpy==1.26.4
+          packaging==26.2
+          pluggy==1.6.0
+          pyerfa==2.0.1.5
+          pytest==8.2.2
+          scipy==1.11.4
+          EOF
+          (cd /tmp/runtime/wheels && sha256sum * | LC_ALL=C sort -k2 > ../wheel-manifest.sha256)
+          test "$(sha256sum /tmp/runtime/wheel-manifest.sha256 | cut -d' ' -f1)" = 'a75bfdb37baaac7209a6e172917a18970dac1a48aad98d947addc6fa17748e4a'
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -czf /tmp/runtime/wheels.tar.gz -C /tmp/runtime wheels
+          test "$(sha256sum /tmp/runtime/wheels.tar.gz | cut -d' ' -f1)" = '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1'
+
+      - name: Verify exact Requests patch identities
+        run: |
+          set -euo pipefail
+          test "$(sha256sum /tmp/patch-artifact/p4-5-requests-runtime-patch.tar.gz | cut -d' ' -f1)" = 'b045abf18df056e99fa2aa47219136b18f2b3f115fcd3db9336d1b1ebabda28a'
+          test "$(sha256sum /tmp/patch-artifact/p4-5-requests-runtime-patch-receipt.json | cut -d' ' -f1)" = '63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91'
+          tar -xzf /tmp/patch-artifact/p4-5-requests-runtime-patch.tar.gz -C /tmp/patch
+          test "$(sha256sum /tmp/patch/requests-wheel-manifest.sha256 | cut -d' ' -f1)" = '952a86e2842f5f4cfb35de196fa8587af949a6732a57edf8a2c43be96665d3d3'
+          test "$(sha256sum /tmp/patch/p4_5_requests_runtime_closure.json | cut -d' ' -f1)" = 'a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497'
+
+      - name: Execute exact network-disabled gate with visible diagnostics
+        run: |
+          set -euo pipefail
+          IMAGE='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
+          docker pull "$IMAGE" >/dev/null
+          docker run --rm --network none -v "$GITHUB_WORKSPACE/source:/work:ro" -v /tmp/runtime:/runtime:ro -v /tmp/patch:/patch:ro -v /tmp/result:/result "$IMAGE" sh -lc '
+            set -eux
+            export PYTHONPYCACHEPREFIX=/result/preflight-pycache
+            mkdir -p "$PYTHONPYCACHEPREFIX"
+            cd /runtime/wheels && sha256sum -c ../wheel-manifest.sha256
+            cd /patch && sha256sum -c requests-wheel-manifest.sha256
+            python -m pip install --disable-pip-version-check --no-index --find-links /runtime/wheels -r /runtime/requirements.in
+            python -m pip install --disable-pip-version-check --no-index --find-links /patch requests==2.32.5
+            cd /work
+            PYTHONPATH=src python -m py_compile scripts/v3_execute_p4_1_locked_images.py
+            PYTHONPATH=src:. pytest -q -p no:cacheprovider --junitxml=/result/final-gate-junit.xml tests/test_p4_image_acquisition.py tests/test_p4_soda_manifest.py | tee /result/final-gate-pytest.txt
+            PYTHONPATH=src:. python -c "import json,requests,scripts.v3_execute_p4_1_locked_images as executor; open(\"/result/final-gate-import.json\",\"w\").write(json.dumps({\"executor_imported\":True,\"executor_module\":executor.__name__,\"requests_version\":requests.__version__},sort_keys=True)+\"\\n\")"
+          '
+
+      - name: Audit exact gate outputs
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib, xml.etree.ElementTree as ET
+          root = ET.parse('/tmp/result/final-gate-junit.xml').getroot()
+          suite = root if root.tag == 'testsuite' else root.find('testsuite')
+          counts = {k: int(suite.attrib.get(k, '-1')) for k in ('tests', 'failures', 'errors', 'skipped')}
+          imported = json.loads(pathlib.Path('/tmp/result/final-gate-import.json').read_text())
+          expected_counts = {'tests': 8, 'failures': 0, 'errors': 0, 'skipped': 0}
+          expected_import = {'executor_imported': True, 'executor_module': 'scripts.v3_execute_p4_1_locked_images', 'requests_version': '2.32.5'}
+          if counts != expected_counts:
+              raise SystemExit(f'final exact test gate failed: {counts}')
+          if imported != expected_import:
+              raise SystemExit(f'final executor import gate failed: {imported}')
+          receipt = {
+              'schema_version': 1,
+              'status': 'PASS_EXACT_OFFLINE_GATE_DIAGNOSTIC',
+              'scientific_source_head': 'd848867710b63213886f5f368af6e9569c410d33',
+              'requests_patch_tar_sha256': 'b045abf18df056e99fa2aa47219136b18f2b3f115fcd3db9336d1b1ebabda28a',
+              'requests_patch_receipt_sha256': '63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91',
+              'requests_closure_sha256': 'a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497',
+              'test_counts': counts,
+              'import_receipt': imported,
+              'network': 'none',
+              'soda_requests_sent': 0,
+              'image_bytes_downloaded': 0,
+              'scores_computed': False,
+          }
+          pathlib.Path('/tmp/result/offline-gate-diagnostic.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload diagnostic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p45-offline-gate-diagnostic-${{ github.run_id }}
+          path: /tmp/result/*
+          retention-days: 3
+          if-no-files-found: error
