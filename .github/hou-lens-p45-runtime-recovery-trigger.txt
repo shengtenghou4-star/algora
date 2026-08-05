@@ -1,8 +1,9 @@
 target=hou-lens-p4-5-single-execution
-sequence=2
+sequence=3
 handoff=stage-validated-blob
 transport=immutable-files-pythonhosted
 cdn_diagnostic_run=31007161254
+bundle_member_scope=wheels-only
 restore=astropy-iers-data-0.2026.7.27.0.56.29,packaging-26.2
 wheel_manifest_sha256=a75bfdb37baaac7209a6e172917a18970dac1a48aad98d947addc6fa17748e4a
 wheel_bundle_sha256=2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1
