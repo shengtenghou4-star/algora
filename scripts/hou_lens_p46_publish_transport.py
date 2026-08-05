@@ -53,7 +53,7 @@ def main() -> None:
     recovered: dict[int, str] = {}
     provenance: dict[int, object] = {}
     fragments: dict[int, dict[int, str]] = {}
-    fragment_provenance: dict[int, dict[int, int]] = {}
+    fragment_provenance: dict[int, dict[int, object]] = {}
     for comment in fetch_comments(
         os.environ["GITHUB_REPOSITORY"],
         os.environ.get("P46_TRANSPORT_ISSUE", "11"),
@@ -105,6 +105,15 @@ def main() -> None:
         bucket = fragments.get(FRAGMENT_BLOCK, {})
         expected_indices = list(range(FRAGMENT_COUNT))
         missing_fragments = [i for i in expected_indices if i not in bucket]
+        frozen_fragment = Path("control/.github/hou-lens-p46-transport-fragments/F024-02.txt")
+        if missing_fragments == [2] and frozen_fragment.is_file():
+            text = frozen_fragment.read_text().strip()
+            raw = text.encode("ascii")
+            if len(raw) != 520 or f"{zlib.crc32(raw) & 0xffffffff:08x}" != "1c889a24":
+                raise SystemExit("frozen F024-02 fragment identity mismatch")
+            bucket[2] = text
+            fragment_provenance.setdefault(FRAGMENT_BLOCK, {})[2] = "main:.github/hou-lens-p46-transport-fragments/F024-02.txt"
+            missing_fragments = [i for i in expected_indices if i not in bucket]
         if missing_fragments:
             raise SystemExit(f"missing fragment repair pieces for block {FRAGMENT_BLOCK}: {missing_fragments}")
         repaired = "".join(bucket[i] for i in expected_indices)
@@ -129,7 +138,7 @@ def main() -> None:
         raise SystemExit("CMS DER identity mismatch")
     Path("/tmp/payload.b64").write_bytes(assembled)
     Path("/tmp/p46-transport-audit.json").write_text(json.dumps({
-        "schema_version": 4,
+        "schema_version": 5,
         "status": "PASS_EXACT_COMMENT_TRANSPORT",
         "run_id": RUN_ID,
         "run_attempt": RUN_ATTEMPT,
