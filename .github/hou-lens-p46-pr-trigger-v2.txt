@@ -1,8 +1,8 @@
 run=31007861910
 attempt=1
-sequence=8
+sequence=9
 transport=B-P000..P027
-repair=P018,P019,P024-fragments-8x520,F024-02-final
+repair=P018,P019,P024-fragments-8x520,F024-02-repository-object
 publisher=v2
 head=d848867710b63213886f5f368af6e9569c410d33
 base64_bytes=116272
@@ -15,3 +15,4 @@ fragment_block=24
 fragment_count=8
 fragment_length=4160
 fragment_crc32=d50ce311
+frozen_fragment_path=.github/hou-lens-p46-transport-fragments/F024-02.txt
