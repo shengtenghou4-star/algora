@@ -20,15 +20,17 @@ jobs:
       TARGET_BRANCH: hou-lens-p4-5-scientific-payload
       PAYLOAD_DIR: .github/hou-lens-p4-5-scientific-payload
       P46_TRANSPORT_ISSUE: '11'
-      EXPECTED_RUN_ID: '30832075911'
+      EXPECTED_RUN_ID: '30917990481'
       EXPECTED_RUN_ATTEMPT: '3'
-      EXPECTED_HEAD_SHA: 73661d25bbd016e96b7f71847e9b3b20b43a1b5c
-      EXPECTED_B64_BYTES: '114304'
-      EXPECTED_B64_SHA256: d96eccc2f6eb3b7f35497e0ebe67a9def9cd95d902d0f5f0b94ac7d68dca8e1f
-      EXPECTED_CMS_BYTES: '85726'
-      EXPECTED_CMS_SHA256: b09dabae1bccec3497ad9dfcfcd262a6b759006c336b3411d3459f70099d010e
-      EXPECTED_TAR_BYTES: '85062'
-      EXPECTED_TAR_SHA256: 65e28ef98d31b2a4ab37cadf3d923fd458290cc377273ecee2c6d4e30ff9851a
+      EXPECTED_HEAD_SHA: 6020a42aadc1e4a1a92b74c3b41c2375d1d857a0
+      EXPECTED_BLOCK_COUNT: '28'
+      EXPECTED_B64_BYTES: '116504'
+      EXPECTED_B64_SHA256: 43a89eab3e85559931517216069438d0bfb84e9dd934de983ffe3ac910a1621e
+      EXPECTED_CMS_BYTES: '87378'
+      EXPECTED_CMS_SHA256: 73af92ce72a8cfa8e7328755b3aad9002bd87843d4d7e5175422d30d97055979
+      EXPECTED_TAR_BYTES: '86712'
+      EXPECTED_TAR_SHA256: 0f1c5b1fced5f8673a1c34b42f2e47c4cf983b26b4cc17e1a13192fb37e73b74
+      PART_BYTES: '29126'
     steps:
       - name: Checkout transport control from main
         uses: actions/checkout@v4
@@ -57,18 +59,19 @@ jobs:
           git config user.email 'hou-lens-p46-transport-bot@users.noreply.github.com'
           rm -rf "$PAYLOAD_DIR"
           mkdir -p "$PAYLOAD_DIR"
-          split -b 28576 -d -a 3 /tmp/payload.b64 /tmp/formal-part-
+          split -b "$PART_BYTES" -d -a 3 /tmp/payload.b64 /tmp/formal-part-
           python - <<'PY'
-          import pathlib
+          import os, pathlib
+          size = int(os.environ['PART_BYTES'])
           parts = sorted(pathlib.Path('/tmp').glob('formal-part-*'))
-          if len(parts) != 4 or any(path.stat().st_size != 28576 for path in parts):
+          if len(parts) != 4 or any(path.stat().st_size != size for path in parts):
               raise SystemExit('formal four-part split mismatch')
           root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
           for index, path in enumerate(parts, 1):
               (root / f'part-{index:03d}.b64').write_bytes(path.read_bytes())
           PY
           git add -A "$PAYLOAD_DIR"
-          git commit -m 'Publish P4.6 attempt 3 encrypted payload parts'
+          git commit -m 'Publish run 30917990481 attempt 3 encrypted payload parts'
           git push origin "HEAD:$TARGET_BRANCH"
 
       - name: Publish manifest as final commit
@@ -115,5 +118,5 @@ jobs:
           (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
           PY
           git add "$PAYLOAD_DIR/manifest.json"
-          git commit -m 'Publish P4.6 attempt 3 manifest last'
+          git commit -m 'Publish run 30917990481 attempt 3 manifest last'
           git push origin "HEAD:$TARGET_BRANCH"
