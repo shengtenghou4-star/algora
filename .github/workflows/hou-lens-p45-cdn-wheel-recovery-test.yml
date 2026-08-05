@@ -1,0 +1,51 @@
+name: HOU-LENS P4.5 exact wheel CDN recovery diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/hou-lens-p45-cdn-wheel-recovery-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  exact-wheel-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Recover exact historical wheels by immutable CDN address
+        run: |
+          set -euo pipefail
+          mkdir -p recovered
+          curl --fail --location --retry 3 --output recovered/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl \
+            'https://files.pythonhosted.org/packages/7b/02/df236615164fbd2fd29b04b5c44ff24949272612ccc84347071a074e0ce0/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl'
+          curl --fail --location --retry 3 --output recovered/packaging-26.2-py3-none-any.whl \
+            'https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl'
+          test "$(sha256sum recovered/astropy_iers_data-0.2026.7.27.0.56.29-py3-none-any.whl | cut -d' ' -f1)" = '8106cce07e38e3e0422f755b8964e6d03ca4d4280bb134934c74d497711f8d2a'
+          test "$(sha256sum recovered/packaging-26.2-py3-none-any.whl | cut -d' ' -f1)" = '5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e'
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root=pathlib.Path('recovered')
+          receipt={
+            'schema_version':1,
+            'status':'PASS_EXACT_HISTORICAL_WHEEL_CDN_RECOVERY',
+            'files':[
+              {'file':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+              for p in sorted(root.iterdir())
+            ],
+            'soda_requests_sent':0,
+            'image_bytes_downloaded':0,
+            'scores_computed':False,
+          }
+          pathlib.Path('recovery-receipt.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(receipt,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload exact recovery receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p45-exact-wheel-cdn-recovery-${{ github.run_id }}
+          path: recovery-receipt.json
+          retention-days: 2
