@@ -1,0 +1,5 @@
+registered=true
+workflow=hou-lens-p45-final-offline-gate-diagnostic.yml
+scientific_head=d848867710b63213886f5f368af6e9569c410d33
+requests_patch_receipt_sha256=63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91
+requests_closure_sha256=a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497
