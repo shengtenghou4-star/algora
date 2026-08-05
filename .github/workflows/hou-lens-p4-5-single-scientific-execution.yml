@@ -106,8 +106,7 @@ jobs:
           (cd /tmp/runtime/wheels && sha256sum * | LC_ALL=C sort -k2 > ../wheel-manifest.sha256)
           test "$(sha256sum /tmp/runtime/wheel-manifest.sha256 | cut -d' ' -f1)" = 'a75bfdb37baaac7209a6e172917a18970dac1a48aad98d947addc6fa17748e4a'
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -czf /tmp/runtime/wheels.tar.gz -C /tmp/runtime \
-            wheels requirements.in requirements.freeze wheel-manifest.sha256
+            -czf /tmp/runtime/wheels.tar.gz -C /tmp/runtime wheels
           test "$(sha256sum /tmp/runtime/wheels.tar.gz | cut -d' ' -f1)" = '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1'
           python - <<'PY'
           import json, pathlib
@@ -115,6 +114,7 @@ jobs:
               'schema_version': 1,
               'stage': 'p4_5_exact_runtime_recovery_after_artifact_expiry',
               'status': 'PASS_RESTORED_ORIGINAL_FROZEN_WHEEL_IDENTITY',
+              'original_bundle_member_scope': ['wheels/'],
               'recovery_transport': 'immutable_files_pythonhosted_content_address',
               'cdn_diagnostic_run_id': 31007161254,
               'source_run_id': 30734422166,
