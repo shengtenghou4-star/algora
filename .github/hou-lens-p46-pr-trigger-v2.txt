@@ -1,7 +1,8 @@
 run=30917990481
 attempt=3
-sequence=3
+sequence=4
 transport=A-P000..P027
 publisher=v2
+repair=restored-P012-P015
 base64_sha256=43a89eab3e85559931517216069438d0bfb84e9dd934de983ffe3ac910a1621e
 cms_sha256=73af92ce72a8cfa8e7328755b3aad9002bd87843d4d7e5175422d30d97055979
