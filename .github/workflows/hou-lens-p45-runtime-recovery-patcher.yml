@@ -8,7 +8,7 @@ on:
       - .github/hou-lens-p45-runtime-recovery-trigger.txt
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   patch-scientific-workflow:
@@ -28,6 +28,7 @@ jobs:
           ref: hou-lens-p4-5-single-execution
           path: target
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Apply exact runtime recovery patch
         run: |
@@ -40,12 +41,11 @@ jobs:
           grep -F '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1' \
             target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
 
-      - name: Commit patched scientific gate
-        working-directory: target
-        run: |
-          set -euo pipefail
-          git config user.name 'hou-lens-runtime-recovery-bot'
-          git config user.email 'hou-lens-runtime-recovery-bot@users.noreply.github.com'
-          git add .github/workflows/hou-lens-p4-5-single-scientific-execution.yml
-          git commit -m 'Restore exact original P4.5 runtime after artifact expiry'
-          git push origin HEAD:hou-lens-p4-5-single-execution
+      - name: Upload patched scientific workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p45-patched-scientific-workflow-${{ github.run_id }}
+          path: target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
