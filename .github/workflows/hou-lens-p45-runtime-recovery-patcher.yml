@@ -32,13 +32,14 @@ jobs:
       - name: Apply and validate exact runtime recovery patch
         run: |
           set -euo pipefail
-          python control/scripts/hou_lens_p45_patch_runtime_recovery.py \
-            target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          WORKFLOW=target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          python control/scripts/hou_lens_p45_patch_runtime_recovery.py "$WORKFLOW"
+          python control/scripts/hou_lens_p45_patch_cdn_recovery.py "$WORKFLOW"
           git -C target diff --check
-          grep -F 'PASS_RESTORED_ORIGINAL_FROZEN_WHEEL_IDENTITY' \
-            target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
-          grep -F '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1' \
-            target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          grep -F 'PASS_RESTORED_ORIGINAL_FROZEN_WHEEL_IDENTITY' "$WORKFLOW"
+          grep -F 'cdn_diagnostic_run_id' "$WORKFLOW"
+          grep -F 'files.pythonhosted.org/packages/7b/02/df236615164fbd2fd29b04b5c44ff24949272612ccc84347071a074e0ce0' "$WORKFLOW"
+          grep -F '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1' "$WORKFLOW"
 
       - name: Upload patched scientific workflow
         uses: actions/upload-artifact@v4
@@ -61,5 +62,5 @@ jobs:
           git config user.name 'hou-lens-runtime-recovery-bot'
           git config user.email 'hou-lens-runtime-recovery-bot@users.noreply.github.com'
           git add staged/hou-lens-p45-runtime-recovery/hou-lens-p4-5-single-scientific-execution.yml
-          git commit -m 'Stage validated exact P4.5 runtime recovery workflow blob'
+          git commit -m 'Stage validated immutable-CDN P4.5 recovery workflow blob'
           git push origin HEAD:hou-lens-p4-5-single-execution
