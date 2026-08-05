@@ -1,0 +1,68 @@
+name: HOU-LENS run 31024654733 encrypted result mirror
+
+on:
+  push:
+    branches: [hou-lens-run31024654733-result-mirror-trigger]
+    paths:
+      - .github/hou-lens-run31024654733-result-mirror-trigger.txt
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  mirror-encrypted-result:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download encrypted private result artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hou-lens-p4-5-encrypted-private-result-31024654733
+          path: /tmp/encrypted-result
+          repository: shengtenghou4-star/algora
+          run-id: 31024654733
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify artifact remains encrypted and mirror to isolated branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -f /tmp/encrypted-result/manifest.json
+          test -f /tmp/encrypted-result/executor-exit-code.txt
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('/tmp/encrypted-result')
+          m = json.loads((root / 'manifest.json').read_text())
+          if str(m.get('run_id')) != '31024654733':
+              raise SystemExit('result run mismatch')
+          if m.get('executor_head_sha') != 'c442ad926a8c22bf786d3a221398c59cfcb81c88':
+              raise SystemExit('result head mismatch')
+          if m.get('public_plaintext_scientific_result') is not False or m.get('scores_publicly_exposed') is not False:
+              raise SystemExit('result artifact is not explicitly encrypted/private')
+          parts = []
+          for row in m['parts']:
+              p = root / row['file']
+              raw = p.read_bytes()
+              if len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
+                  raise SystemExit(f"encrypted part mismatch {row['file']}")
+              parts.append(raw)
+          cms = b''.join(parts)
+          if len(cms) != m['cms_der_bytes'] or hashlib.sha256(cms).hexdigest() != m['cms_der_sha256']:
+              raise SystemExit('encrypted CMS identity mismatch')
+          print('PASS_ENCRYPTED_RESULT_ONLY')
+          PY
+          rm -rf /tmp/result-mirror-repo
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/result-mirror-repo
+          cd /tmp/result-mirror-repo
+          git checkout --orphan hou-lens-run31024654733-encrypted-result
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p encrypted-result
+          cp /tmp/encrypted-result/* encrypted-result/
+          printf '%s\n' 'Encrypted artifact only; decrypt locally with the frozen recipient private key.' > README.md
+          git config user.name 'hou-lens-encrypted-result-mirror'
+          git config user.email 'hou-lens-encrypted-result-mirror@users.noreply.github.com'
+          git add README.md encrypted-result
+          git commit -m 'Mirror encrypted HOU-LENS run 31024654733 result'
+          git push --force origin HEAD:hou-lens-run31024654733-encrypted-result
