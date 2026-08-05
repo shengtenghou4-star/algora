@@ -1,0 +1,51 @@
+name: HOU-LENS P4.5 exact runtime recovery patcher
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/hou-lens-p45-runtime-recovery-trigger.txt
+
+permissions:
+  contents: write
+
+jobs:
+  patch-scientific-workflow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout patch control from main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: control
+          persist-credentials: false
+
+      - name: Checkout scientific execution branch
+        uses: actions/checkout@v4
+        with:
+          ref: hou-lens-p4-5-single-execution
+          path: target
+          fetch-depth: 0
+
+      - name: Apply exact runtime recovery patch
+        run: |
+          set -euo pipefail
+          python control/scripts/hou_lens_p45_patch_runtime_recovery.py \
+            target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          git -C target diff --check
+          grep -F 'PASS_RESTORED_ORIGINAL_FROZEN_WHEEL_IDENTITY' \
+            target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          grep -F '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1' \
+            target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+
+      - name: Commit patched scientific gate
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git config user.name 'hou-lens-runtime-recovery-bot'
+          git config user.email 'hou-lens-runtime-recovery-bot@users.noreply.github.com'
+          git add .github/workflows/hou-lens-p4-5-single-scientific-execution.yml
+          git commit -m 'Restore exact original P4.5 runtime after artifact expiry'
+          git push origin HEAD:hou-lens-p4-5-single-execution
