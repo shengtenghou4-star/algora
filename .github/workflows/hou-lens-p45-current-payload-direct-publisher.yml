@@ -1,0 +1,182 @@
+name: HOU-LENS P4.5 current exact payload direct publisher
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/hou-lens-p45-current-payload-trigger.txt
+
+permissions:
+  contents: write
+
+jobs:
+  publish-exact-current-payload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH: hou-lens-p4-5-scientific-payload
+      TARGET_DIR: .github/hou-lens-p4-5-scientific-payload
+      RUN_ID: '31024654733'
+      RUN_ATTEMPT: '1'
+      HEAD_SHA: c442ad926a8c22bf786d3a221398c59cfcb81c88
+      PAYLOAD_URL: https://temp.sh/hou-lens-run31024654733-payload.b64
+      MANIFEST_URL: https://temp.sh/hou-lens-run31024654733-manifest.json
+      B64_BYTES: '116272'
+      B64_SHA256: db258a52ad489c333025d75247551655654419e53572ce271e1e22b53a4844f8
+      CMS_BYTES: '87202'
+      CMS_SHA256: 1d2def1657e89982f3d84b8e4cfe9d037619a4f045d21dae0195d6d95a3b999a
+      TAR_BYTES: '86541'
+      TAR_SHA256: 1183982f4de52de9761bc824200247d5078eae99e88c739af4e532b5c113fc90
+    steps:
+      - name: Checkout payload branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Download and validate encrypted carrier before any write
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/hou-lens-current-payload
+          curl --fail --location --retry 4 --max-time 120 "$PAYLOAD_URL" -o /tmp/hou-lens-current-payload/payload.b64
+          curl --fail --location --retry 4 --max-time 120 "$MANIFEST_URL" -o /tmp/hou-lens-current-payload/manifest.preblob.json
+          test "$(wc -c < /tmp/hou-lens-current-payload/payload.b64)" = "$B64_BYTES"
+          test "$(sha256sum /tmp/hou-lens-current-payload/payload.b64 | cut -d' ' -f1)" = "$B64_SHA256"
+          base64 -d /tmp/hou-lens-current-payload/payload.b64 > /tmp/hou-lens-current-payload/payload.der
+          test "$(wc -c < /tmp/hou-lens-current-payload/payload.der)" = "$CMS_BYTES"
+          test "$(sha256sum /tmp/hou-lens-current-payload/payload.der | cut -d' ' -f1)" = "$CMS_SHA256"
+          python - <<'PY'
+          import json, os, pathlib
+          p = pathlib.Path('/tmp/hou-lens-current-payload/manifest.preblob.json')
+          m = json.loads(p.read_text())
+          expected = {
+              'run_id': os.environ['RUN_ID'],
+              'run_attempt': os.environ['RUN_ATTEMPT'],
+              'executor_head_sha': os.environ['HEAD_SHA'],
+              'base64_bytes': int(os.environ['B64_BYTES']),
+              'base64_sha256': os.environ['B64_SHA256'],
+              'cms_der_bytes': int(os.environ['CMS_BYTES']),
+              'cms_der_sha256': os.environ['CMS_SHA256'],
+              'private_tar_bytes': int(os.environ['TAR_BYTES']),
+              'private_tar_sha256': os.environ['TAR_SHA256'],
+              'part_count': 8,
+          }
+          for key, value in expected.items():
+              if m.get(key) != value:
+                  raise SystemExit(f'manifest mismatch {key}: {m.get(key)!r} != {value!r}')
+          names = [x['file'] for x in m['parts']]
+          expected_names = [f'run31024654733-part-{i:03d}.b64' for i in range(1, 9)]
+          if names != expected_names:
+              raise SystemExit(f'part names mismatch: {names}')
+          if any('git_blob' in x for x in m['parts']):
+              raise SystemExit('preblob manifest unexpectedly contains git_blob')
+          print('PASS_EXACT_CURRENT_PAYLOAD_CARRIER')
+          PY
+
+      - name: Split exactly according to frozen manifest and verify every part
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('/tmp/hou-lens-current-payload')
+          raw = (root / 'payload.b64').read_bytes()
+          manifest = json.loads((root / 'manifest.preblob.json').read_text())
+          out = root / 'parts'
+          out.mkdir()
+          cursor = 0
+          for row in manifest['parts']:
+              size = int(row['bytes'])
+              part = raw[cursor:cursor + size]
+              cursor += size
+              if len(part) != size:
+                  raise SystemExit(f"short part {row['file']}")
+              digest = hashlib.sha256(part).hexdigest()
+              if digest != row['sha256']:
+                  raise SystemExit(f"part hash mismatch {row['file']}: {digest}")
+              (out / row['file']).write_bytes(part)
+          if cursor != len(raw):
+              raise SystemExit(f'unconsumed payload bytes: {len(raw) - cursor}')
+          print('PASS_ALL_EIGHT_EXACT_PARTS')
+          PY
+
+      - name: Publish all eight parts before manifest
+        run: |
+          set -euo pipefail
+          mkdir -p "$TARGET_DIR"
+          rm -f "$TARGET_DIR"/run31024654733-part-*.b64
+          cp /tmp/hou-lens-current-payload/parts/run31024654733-part-*.b64 "$TARGET_DIR/"
+          python - <<'PY'
+          import hashlib, json, pathlib
+          m = json.loads(pathlib.Path('/tmp/hou-lens-current-payload/manifest.preblob.json').read_text())
+          root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
+          for row in m['parts']:
+              p = root / row['file']
+              if p.stat().st_size != row['bytes'] or hashlib.sha256(p.read_bytes()).hexdigest() != row['sha256']:
+                  raise SystemExit(f"working-tree part mismatch {row['file']}")
+          PY
+          git config user.name 'hou-lens-payload-publisher'
+          git config user.email 'hou-lens-payload-publisher@users.noreply.github.com'
+          git add "$TARGET_DIR"/run31024654733-part-*.b64
+          if ! git diff --cached --quiet; then
+            git commit -m 'Publish exact run 31024654733 payload parts before manifest'
+            git push origin "HEAD:$TARGET_BRANCH"
+          fi
+
+      - name: Build and publish manifest last
+        run: |
+          set -euo pipefail
+          git fetch origin "$TARGET_BRANCH"
+          git reset --hard "origin/$TARGET_BRANCH"
+          python - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          tmp = pathlib.Path('/tmp/hou-lens-current-payload')
+          target = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
+          m = json.loads((tmp / 'manifest.preblob.json').read_text())
+          for row in m['parts']:
+              p = target / row['file']
+              if p.stat().st_size != row['bytes'] or hashlib.sha256(p.read_bytes()).hexdigest() != row['sha256']:
+                  raise SystemExit(f"remote-roundtrip part mismatch {row['file']}")
+              row['git_blob'] = subprocess.check_output(['git', 'hash-object', str(p)], text=True).strip()
+          out = target / 'manifest.json'
+          out.write_text(json.dumps(m, indent=2, sort_keys=True) + '\n')
+          check = json.loads(out.read_text())
+          if check['run_id'] != '31024654733' or check['executor_head_sha'] != 'c442ad926a8c22bf786d3a221398c59cfcb81c88':
+              raise SystemExit('final manifest binding mismatch')
+          print('PASS_FINAL_MANIFEST_BUILT_AFTER_PARTS')
+          PY
+          git add "$TARGET_DIR/manifest.json"
+          git commit -m 'Release run 31024654733 payload manifest last'
+          git push origin "HEAD:$TARGET_BRANCH"
+
+      - name: Verify final remote branch identity
+        run: |
+          set -euo pipefail
+          git fetch origin "$TARGET_BRANCH"
+          git reset --hard "origin/$TARGET_BRANCH"
+          python - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          root = pathlib.Path('.github/hou-lens-p4-5-scientific-payload')
+          m = json.loads((root / 'manifest.json').read_text())
+          expected = {
+              'run_id': '31024654733',
+              'run_attempt': '1',
+              'executor_head_sha': 'c442ad926a8c22bf786d3a221398c59cfcb81c88',
+              'base64_sha256': 'db258a52ad489c333025d75247551655654419e53572ce271e1e22b53a4844f8',
+              'cms_der_sha256': '1d2def1657e89982f3d84b8e4cfe9d037619a4f045d21dae0195d6d95a3b999a',
+              'private_tar_sha256': '1183982f4de52de9761bc824200247d5078eae99e88c739af4e532b5c113fc90',
+              'part_count': 8,
+          }
+          for key, value in expected.items():
+              if m.get(key) != value:
+                  raise SystemExit(f'final remote manifest mismatch {key}')
+          for row in m['parts']:
+              p = root / row['file']
+              if p.stat().st_size != row['bytes']:
+                  raise SystemExit(f"final remote bytes mismatch {row['file']}")
+              if hashlib.sha256(p.read_bytes()).hexdigest() != row['sha256']:
+                  raise SystemExit(f"final remote hash mismatch {row['file']}")
+              if subprocess.check_output(['git', 'hash-object', str(p)], text=True).strip() != row['git_blob']:
+                  raise SystemExit(f"final remote git blob mismatch {row['file']}")
+          print('PASS_FINAL_REMOTE_PAYLOAD_IDENTITY')
+          PY
