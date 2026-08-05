@@ -35,11 +35,16 @@ jobs:
           WORKFLOW=target/.github/workflows/hou-lens-p4-5-single-scientific-execution.yml
           python control/scripts/hou_lens_p45_patch_runtime_recovery.py "$WORKFLOW"
           python control/scripts/hou_lens_p45_patch_cdn_recovery.py "$WORKFLOW"
+          python control/scripts/hou_lens_p45_patch_offline_gate_hashes.py "$WORKFLOW"
           git -C target diff --check
           grep -F 'PASS_RESTORED_ORIGINAL_FROZEN_WHEEL_IDENTITY' "$WORKFLOW"
           grep -F 'cdn_diagnostic_run_id' "$WORKFLOW"
           grep -F 'files.pythonhosted.org/packages/7b/02/df236615164fbd2fd29b04b5c44ff24949272612ccc84347071a074e0ce0' "$WORKFLOW"
           grep -F '2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1' "$WORKFLOW"
+          grep -F '63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91' "$WORKFLOW"
+          grep -F 'a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497' "$WORKFLOW"
+          ! grep -F '63a1f6ffda021310f8da34b4d7028ec15cd1abc8d75ba6fd753320df54be90a8' "$WORKFLOW"
+          ! grep -F 'a92ef67259db37906756b52b7d098bc7c5093afcfef6904819ed64f44bf2e8aa' "$WORKFLOW"
 
       - name: Upload patched scientific workflow
         uses: actions/upload-artifact@v4
@@ -62,5 +67,5 @@ jobs:
           git config user.name 'hou-lens-runtime-recovery-bot'
           git config user.email 'hou-lens-runtime-recovery-bot@users.noreply.github.com'
           git add staged/hou-lens-p45-runtime-recovery/hou-lens-p4-5-single-scientific-execution.yml
-          git commit -m 'Stage validated immutable-CDN P4.5 recovery workflow blob'
+          git commit -m 'Stage validated P4.5 offline gate metadata repair workflow blob'
           git push origin HEAD:hou-lens-p4-5-single-execution
