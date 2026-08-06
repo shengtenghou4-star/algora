@@ -1,0 +1,7 @@
+run_id=31024654733
+run_attempt=2
+replica=C
+blocks=48
+base64_sha256=8474aef3e7d78471f85d8cdacb16f4e12b5a438b2f8e88cd06642a79267c7fec
+cms_sha256=595c0aa2e7b8926d1fe0a404d869f11cb66d13864bba419c486223d37e1033b6
+manifest_policy=last
