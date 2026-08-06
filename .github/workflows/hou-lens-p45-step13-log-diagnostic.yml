@@ -1,0 +1,69 @@
+name: HOU-LENS P4.5 step13 log diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/hou-lens-p45-step13-log-trigger.txt
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download exact failed job log
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            'https://api.github.com/repos/shengtenghou4-star/algora/actions/jobs/92555051649/logs' \
+            -o /tmp/job.log
+          test -s /tmp/job.log
+
+      - name: Extract step13 terminal diagnosis
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib, re
+          raw = pathlib.Path('/tmp/job.log').read_text(errors='replace').splitlines()
+          marker = 'Independently audit and encrypt every private result byte'
+          starts = [i for i,line in enumerate(raw) if marker in line]
+          if not starts:
+              raise SystemExit('step13 marker not found')
+          start = starts[-1]
+          next_markers = [i for i in range(start+1,len(raw)) if 'Upload encrypted P4.5 private result' in raw[i]]
+          end = next_markers[0] if next_markers else len(raw)
+          block = raw[start:end]
+          error_lines = [line for line in block if ('##[error]' in line or 'Process completed with exit code' in line or 'Traceback' in line or 'Error:' in line or 'No such file' in line or 'Permission denied' in line)]
+          shell_lines = [line for line in block if re.search(r'\+ (rm |tar |openssl |split |cp |python |test |sha256sum )', line)]
+          result = {
+              'schema_version': 1,
+              'job_id': 92555051649,
+              'run_id': 31024654733,
+              'run_attempt': 2,
+              'step13_line_count': len(block),
+              'error_lines': error_lines,
+              'last_120_step13_lines': block[-120:],
+              'last_80_shell_trace_lines': shell_lines[-80:],
+          }
+          out = pathlib.Path('/tmp/step13-diagnostic.json')
+          out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
+          print(json.dumps(result, indent=2, ensure_ascii=False))
+          PY
+
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p45-step13-log-diagnostic-${{ github.run_id }}
+          path: /tmp/step13-diagnostic.json
+          retention-days: 3
+          if-no-files-found: error
