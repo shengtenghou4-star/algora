@@ -28,42 +28,44 @@ jobs:
             'https://api.github.com/repos/shengtenghou4-star/algora/actions/jobs/92555051649/logs' \
             -o /tmp/job.log
           test -s /tmp/job.log
+          file /tmp/job.log
+          wc -c /tmp/job.log
 
-      - name: Extract step13 terminal diagnosis
+      - name: Build broad text index
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, pathlib, re
-          raw = pathlib.Path('/tmp/job.log').read_text(errors='replace').splitlines()
-          marker = 'Independently audit and encrypt every private result byte'
-          starts = [i for i,line in enumerate(raw) if marker in line]
-          if not starts:
-              raise SystemExit('step13 marker not found')
-          start = starts[-1]
-          next_markers = [i for i in range(start+1,len(raw)) if 'Upload encrypted P4.5 private result' in raw[i]]
-          end = next_markers[0] if next_markers else len(raw)
-          block = raw[start:end]
-          error_lines = [line for line in block if ('##[error]' in line or 'Process completed with exit code' in line or 'Traceback' in line or 'Error:' in line or 'No such file' in line or 'Permission denied' in line)]
-          shell_lines = [line for line in block if re.search(r'\+ (rm |tar |openssl |split |cp |python |test |sha256sum )', line)]
-          result = {
-              'schema_version': 1,
-              'job_id': 92555051649,
-              'run_id': 31024654733,
-              'run_attempt': 2,
-              'step13_line_count': len(block),
-              'error_lines': error_lines,
-              'last_120_step13_lines': block[-120:],
-              'last_80_shell_trace_lines': shell_lines[-80:],
-          }
-          out = pathlib.Path('/tmp/step13-diagnostic.json')
-          out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + '\n')
-          print(json.dumps(result, indent=2, ensure_ascii=False))
+          import json, pathlib, re, zipfile
+          path=pathlib.Path('/tmp/job.log')
+          texts=[]
+          if zipfile.is_zipfile(path):
+              with zipfile.ZipFile(path) as zf:
+                  for name in zf.namelist():
+                      if not name.endswith('/'):
+                          texts.append((name,zf.read(name).decode('utf-8','replace')))
+          else:
+              texts=[('job.log',path.read_text(errors='replace'))]
+          terms=('independent-audit','private-result.tar.gz','result.cms.der','openssl cms','split -b','rm -rf','Process completed with exit code','##[error]','Traceback','Permission denied','No such file','PASS_INDEPENDENT_PRIVATE_BYTE_AUDIT')
+          hits=[]
+          tails={}
+          for name,text in texts:
+              lines=text.splitlines()
+              tails[name]=lines[-250:]
+              for i,line in enumerate(lines):
+                  if any(term.lower() in line.lower() for term in terms):
+                      hits.append({'file':name,'line_number':i+1,'line':line})
+          result={'schema_version':2,'job_id':92555051649,'run_id':31024654733,'archive_members':[n for n,_ in texts],'hits':hits,'tails':tails}
+          pathlib.Path('/tmp/step13-diagnostic.json').write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
+          print(json.dumps({'archive_members':result['archive_members'],'hit_count':len(hits),'last_hits':hits[-30:]},indent=2,ensure_ascii=False))
           PY
 
-      - name: Upload diagnostic
+      - name: Upload raw log and index
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hou-lens-p45-step13-log-diagnostic-${{ github.run_id }}
-          path: /tmp/step13-diagnostic.json
+          path: |
+            /tmp/job.log
+            /tmp/step13-diagnostic.json
           retention-days: 3
-          if-no-files-found: error
+          if-no-files-found: warn
