@@ -1,0 +1,31 @@
+{
+  "base64_bytes": 5644,
+  "base64_sha256": "d1e6d0a9779af9a94af86df04be63ae8348670c8a5c1fb633be1baa3616873b1",
+  "blind_search": false,
+  "cms_der_bytes": 4232,
+  "cms_der_sha256": "a1a5075e85f9d6b1845e63940643d7b92368c07c38e0b1c913feab62d0b1c7d2",
+  "executor_head_sha": "21470b5b3f4be942b9e88d43807c8e623de40d02",
+  "future_validation_touched": false,
+  "logical_request_count": 190,
+  "object_count": 38,
+  "part_count": 1,
+  "parts": [
+    {
+      "bytes": 5644,
+      "file": "part-000.b64",
+      "git_blob": "bc7f68910ccee0a85de3d779bc423d56e500b0f7",
+      "sha256": "d1e6d0a9779af9a94af86df04be63ae8348670c8a5c1fb633be1baa3616873b1"
+    }
+  ],
+  "payload_files_count": 3,
+  "payload_tar_bytes": 3649,
+  "payload_tar_sha256": "e21a9463e54051cb780983300a10a1ddff888532f8a4b622b5549e9025e46ae9",
+  "protocol": "HOU-LENS-P4.9.5-ENCRYPTED-BASELINE-PAYLOAD",
+  "public_plaintext_target_identities": false,
+  "run_attempt": "1",
+  "run_id": "31162703250",
+  "runner_certificate_sha256": "22ae00e0589ff85bc3ff82926d8e673e546b58d63feb0f346c6f315dd3c88fcc",
+  "schema_version": 1,
+  "scores_available": false,
+  "unknown_dr5_only_targets_queried": false
+}
