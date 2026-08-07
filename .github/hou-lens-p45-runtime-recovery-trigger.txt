@@ -1,0 +1,12 @@
+target=hou-lens-p4-5-single-execution
+sequence=4
+handoff=stage-validated-blob
+transport=immutable-files-pythonhosted
+cdn_diagnostic_run=31007161254
+offline_gate_diagnostic_run=31024238250
+bundle_member_scope=wheels-only
+restore=astropy-iers-data-0.2026.7.27.0.56.29,packaging-26.2
+wheel_manifest_sha256=a75bfdb37baaac7209a6e172917a18970dac1a48aad98d947addc6fa17748e4a
+wheel_bundle_sha256=2b93e842ba98db65bef6a1073e073a55e694741de7ecd47878a6b949288eb8f1
+requests_patch_receipt_sha256=63a464ae49d4b7b760de5eb2465a35c2e0e952b1bbdaf1baf2543fc1abb44c91
+requests_closure_sha256=a92efee14a834137f3d78abdc2dcfc163e60ba3a4b4a91910d165393e8b3c497
