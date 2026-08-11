@@ -1,0 +1,25 @@
+name: HTFI transport self-test
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create probe
+        run: |
+          mkdir -p out
+          printf 'htfi-public-bridge-ok\n' > out/probe.txt
+          sha256sum out/probe.txt > out/SHA256SUMS.txt
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-public-bridge-self-test
+          path: out/
+          retention-days: 1
