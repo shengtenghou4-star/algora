@@ -1,0 +1,46 @@
+name: HTFI source tag ledgers
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: FD26, repo: postgres/postgres }
+          - { id: FD27, repo: apache/httpd }
+          - { id: FD28, repo: memcached/memcached }
+          - { id: FD29, repo: opencv/opencv }
+          - { id: FD30, repo: isc-projects/bind9 }
+          - { id: FD31, repo: OISF/suricata }
+          - { id: FD32, repo: FreeRADIUS/freeradius-server }
+          - { id: FD33, repo: eclipse-mosquitto/mosquitto }
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Fetch tag metadata only
+        shell: bash
+        env:
+          REPO: ${{ matrix.repo }}
+          ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          git clone --bare --filter=blob:none --quiet "https://github.com/${REPO}.git" repo.git
+          git -C repo.git for-each-ref --sort=creatordate \
+            --format='%(refname:strip=2)|%(creatordate:iso8601-strict)|%(objecttype)|%(objectname)|%(*objectname)' refs/tags \
+            > "out/${ID}_tags.txt"
+          printf '%s\n' "$REPO" > "out/${ID}_repo.txt"
+          sha256sum out/* > "out/${ID}_SHA256SUMS.txt"
+      - name: Upload ledger
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-ledger-${{ matrix.id }}
+          path: out/
+          retention-days: 1
