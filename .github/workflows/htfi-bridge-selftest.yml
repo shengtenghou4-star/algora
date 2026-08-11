@@ -23,12 +23,10 @@ jobs:
           from pathlib import Path
           import json
           x=json.loads(Path('out/root_files.json').read_text())
-          if not isinstance(x,list):
-              raise SystemExit(f'expected list, got {type(x)}: {str(x)[:500]}')
+          if not isinstance(x,list): raise SystemExit(f'expected list, got {type(x)}')
           targets=[r for r in x if r.get('filename')=='performance_time_series.csv']
           Path('out/root_file_summary.json').write_text(json.dumps([{'id':r.get('id'),'filename':r.get('filename'),'status':r.get('status'),'folder_id':r.get('folder_id'),'content_details':r.get('content_details')} for r in x],indent=2),encoding='utf-8')
-          if len(targets)!=1:
-              raise SystemExit(f'target count={len(targets)}; names={[r.get("filename") for r in x]}')
+          if len(targets)!=1: raise SystemExit(f'target count={len(targets)}')
           r=targets[0]
           Path('out/target_metadata.json').write_text(json.dumps(r,indent=2),encoding='utf-8')
           Path('out/target_file_id.txt').write_text(str(r['id']))
@@ -37,26 +35,30 @@ jobs:
           Path('out/target_download_url.txt').write_text(url)
           PY
           FILEID=$(cat out/target_file_id.txt)
-          curl -L -sS --fail -H 'Accept: application/vnd.mendeley-public-dataset.1+json' \
-            -o out/target_file_metadata.json \
-            "https://data.mendeley.com/public-api/datasets/f4fj887y67/files/${FILEID}"
+          curl -L -sS --fail -H 'Accept: application/vnd.mendeley-public-dataset.1+json' -o out/target_file_metadata.json "https://data.mendeley.com/public-api/datasets/f4fj887y67/files/${FILEID}"
           URL=$(cat out/target_download_url.txt)
-          curl -L -sS --fail --retry 3 -o out/performance_time_series.csv "$URL"
+          curl -L -sS --fail --retry 3 -o out/performance_time_series_RAW.csv "$URL"
           python3 - <<'PY'
-          import csv, json
+          import csv,json
           from pathlib import Path
-          p=Path('out/performance_time_series.csv')
-          with p.open(newline='',encoding='utf-8-sig') as f:
-              r=csv.DictReader(f)
-              fields=r.fieldnames
-              rows=list(r)
-          assert len(rows)==398, len(rows)
-          assert fields==['Year','Data','Domain','Metric','Units'], fields
-          domains=sorted(set(x['Domain'] for x in rows))
+          raw=Path('out/performance_time_series_RAW.csv')
+          with raw.open(newline='',encoding='utf-8-sig') as f:
+              r=csv.reader(f); rows=list(r)
+          header=rows[0]; body=rows[1:]
+          assert len(body)==398, len(body)
+          assert header==['','Year','Data','Domain','Metric','Units'], header
+          assert all(len(x)==6 for x in body)
+          idx=[int(x[0]) for x in body]
+          assert idx==list(range(398)), (idx[:5],idx[-5:])
+          canonical=[x[1:] for x in body]
+          domains=sorted(set(x[2] for x in canonical))
           assert len(domains)==30, len(domains)
-          counts={d:sum(1 for x in rows if x['Domain']==d) for d in domains}
+          with open('out/performance_time_series.csv','w',newline='',encoding='utf-8') as f:
+              w=csv.writer(f); w.writerow(['Year','Data','Domain','Metric','Units']); w.writerows(canonical)
+          counts={d:sum(1 for x in canonical if x[2]==d) for d in domains}
           Path('out/domain_counts.json').write_text(json.dumps(counts,indent=2),encoding='utf-8')
-          print('VALIDATED',len(rows),len(domains),fields)
+          Path('out/validation.json').write_text(json.dumps({'raw_rows':398,'raw_header':header,'raw_index_exact_0_397':True,'canonical_columns':['Year','Data','Domain','Metric','Units'],'domains':30},indent=2),encoding='utf-8')
+          print('VALIDATED raw=398 canonical=398 domains=30')
           PY
           sha256sum out/* > out/SHA256SUMS.txt
           ls -lh out > out/LISTING.txt
