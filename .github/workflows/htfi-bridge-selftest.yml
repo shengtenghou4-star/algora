@@ -23,3 +23,4 @@ jobs:
           name: htfi-public-bridge-self-test
           path: out/
           retention-days: 1
+# temporary transport-only workflow; never merge
