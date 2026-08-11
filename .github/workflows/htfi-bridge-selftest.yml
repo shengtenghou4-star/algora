@@ -1,4 +1,4 @@
-name: HTFI transport self-test
+name: HTFI public data bridge
 
 on:
   pull_request:
@@ -8,19 +8,77 @@ permissions:
   contents: read
 
 jobs:
-  self-test:
+  fetch-adc:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Create probe
+      - name: Fetch author-maintained Murmann ADC workbook
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p out
-          printf 'htfi-public-bridge-ok\n' > out/probe.txt
-          sha256sum out/probe.txt > out/SHA256SUMS.txt
-      - name: Upload probe
+          curl -L --fail --retry 3 --connect-timeout 20 \
+            -o out/ADCsurvey_latest.xlsx \
+            https://raw.githubusercontent.com/bmurmann/ADC-survey/main/xls/ADCsurvey_latest.xlsx
+          file out/ADCsurvey_latest.xlsx > out/FILE.txt
+          stat -c '%s' out/ADCsurvey_latest.xlsx > out/SIZE.txt
+          sha256sum out/ADCsurvey_latest.xlsx > out/SHA256SUMS.txt
+      - name: Upload ADC raw artifact
         uses: actions/upload-artifact@v4
         with:
-          name: htfi-public-bridge-self-test
+          name: htfi-adc-raw
           path: out/
           retention-days: 1
-# temporary transport-only workflow; never merge
+
+  probe-mendeley:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe public metadata and file endpoints
+        shell: bash
+        run: |
+          set -u
+          mkdir -p out
+          cat > out/urls.txt <<'EOF'
+          https://api.data.mendeley.com/datasets/f4fj887y67?version=2
+          https://api.data.mendeley.com/datasets/f4fj887y67/files?version=2
+          https://api.data.mendeley.com/datasets/f4fj887y67/zip?version=2
+          https://api.data.mendeley.com/datasets/f4fj887y67/zip/file_downloaded?version=2
+          https://data.mendeley.com/datasets/f4fj887y67/2
+          https://api.datacite.org/dois/10.17632/f4fj887y67.2
+          https://data.mendeley.com/oai?verb=ListRecords&metadataPrefix=oai_dc&from=2020-11-18&until=2020-11-18
+          EOF
+          i=0
+          while IFS= read -r u; do
+            i=$((i+1)); tag=$(printf '%02d' "$i")
+            printf '%s\n' "$u" > "out/${tag}.url"
+            curl -L -sS --max-time 90 -D "out/${tag}.headers" -o "out/${tag}.body" "$u" || printf 'curl_exit=%s\n' "$?" > "out/${tag}.curl_error"
+          done < out/urls.txt
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, json
+          out=Path('out'); hits=[]
+          for p in sorted(out.glob('*.body')):
+              b=p.read_bytes(); s=b.decode('utf-8','ignore')
+              rec={'file':p.name,'bytes':len(b)}
+              names=[x for x in ['performance_time_series.csv','PERFORMANCE_DOMAINS_K_Kr2.csv','All_patents_info.csv'] if x in s]
+              if names: rec['target_names']=names
+              uuids=sorted(set(re.findall(r'(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b',s)))
+              if uuids: rec['uuids']=uuids[:500]
+              urls=sorted(set(re.findall(r'https?://[^\"\'<>\\s]+',s)))
+              urls=[u for u in urls if any(k in u.lower() for k in ['mendeley','digitalcommons','f4fj887y67','datacite'])]
+              if urls: rec['urls']=urls[:500]
+              for name in names:
+                  pos=s.find(name); rec.setdefault('contexts',[]).append(s[max(0,pos-2500):pos+3500])
+              hits.append(rec)
+          (out/'probe_summary.json').write_text(json.dumps(hits,indent=2),encoding='utf-8')
+          PY
+          find out -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ALL_SHA256SUMS.txt
+          ls -lh out > out/LISTING.txt
+      - name: Upload Mendeley probe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-mendeley-probe
+          path: out/
+          retention-days: 1
