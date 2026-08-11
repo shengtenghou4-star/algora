@@ -21,7 +21,7 @@ jobs:
           curl -L -sS --fail -H 'Accept: application/vnd.mendeley-public-dataset.1+json' -o out/root_files.json "$LIST"
           python3 - <<'PY'
           from pathlib import Path
-          import json,sys
+          import json
           x=json.loads(Path('out/root_files.json').read_text())
           if not isinstance(x,list):
               raise SystemExit(f'expected list, got {type(x)}: {str(x)[:500]}')
@@ -43,14 +43,20 @@ jobs:
           URL=$(cat out/target_download_url.txt)
           curl -L -sS --fail --retry 3 -o out/performance_time_series.csv "$URL"
           python3 - <<'PY'
-          import pandas as pd
-          p='out/performance_time_series.csv'
-          d=pd.read_csv(p)
-          assert len(d)==398, len(d)
-          assert d['Domain'].nunique()==30, d['Domain'].nunique()
-          assert list(d.columns)==['Year','Data','Domain','Metric','Units'], list(d.columns)
-          d.groupby('Domain').size().rename('n').to_csv('out/domain_counts.csv')
-          print('VALIDATED',len(d),d.Domain.nunique(),list(d.columns))
+          import csv, json
+          from pathlib import Path
+          p=Path('out/performance_time_series.csv')
+          with p.open(newline='',encoding='utf-8-sig') as f:
+              r=csv.DictReader(f)
+              fields=r.fieldnames
+              rows=list(r)
+          assert len(rows)==398, len(rows)
+          assert fields==['Year','Data','Domain','Metric','Units'], fields
+          domains=sorted(set(x['Domain'] for x in rows))
+          assert len(domains)==30, len(domains)
+          counts={d:sum(1 for x in rows if x['Domain']==d) for d in domains}
+          Path('out/domain_counts.json').write_text(json.dumps(counts,indent=2),encoding='utf-8')
+          print('VALIDATED',len(rows),len(domains),fields)
           PY
           sha256sum out/* > out/SHA256SUMS.txt
           ls -lh out > out/LISTING.txt
