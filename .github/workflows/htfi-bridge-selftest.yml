@@ -1,4 +1,4 @@
-name: HTFI Mendeley raw file bridge
+name: HTFI Mendeley version consistency bridge
 
 on:
   pull_request:
@@ -8,68 +8,56 @@ permissions:
   contents: read
 
 jobs:
-  fetch-target:
+  fetch-consistency:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - name: Fetch root file list and target raw CSV
+      - name: Fetch V1/V2 small public files
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          LIST='https://data.mendeley.com/public-api/datasets/f4fj887y67/files?folder_id=root&version=2'
-          curl -L -sS --fail -H 'Accept: application/vnd.mendeley-public-dataset.1+json' -o out/root_files.json "$LIST"
           python3 - <<'PY'
-          from pathlib import Path
-          import json
-          x=json.loads(Path('out/root_files.json').read_text())
-          if not isinstance(x,list): raise SystemExit(f'expected list, got {type(x)}')
-          targets=[r for r in x if r.get('filename')=='performance_time_series.csv']
-          Path('out/root_file_summary.json').write_text(json.dumps([{'id':r.get('id'),'filename':r.get('filename'),'status':r.get('status'),'folder_id':r.get('folder_id'),'content_details':r.get('content_details')} for r in x],indent=2),encoding='utf-8')
-          if len(targets)!=1: raise SystemExit(f'target count={len(targets)}')
-          r=targets[0]
-          Path('out/target_metadata.json').write_text(json.dumps(r,indent=2),encoding='utf-8')
-          Path('out/target_file_id.txt').write_text(str(r['id']))
-          url=r.get('content_details',{}).get('download_url')
-          if not url: raise SystemExit('target has no content_details.download_url')
-          Path('out/target_download_url.txt').write_text(url)
+          import json,urllib.request,hashlib,pathlib
+          out=pathlib.Path('out')
+          headers={'Accept':'application/vnd.mendeley-public-dataset.1+json','User-Agent':'htfi-audit'}
+          report={}
+          for ver in (1,2):
+              list_url=f'https://data.mendeley.com/public-api/datasets/f4fj887y67/files?folder_id=root&version={ver}'
+              req=urllib.request.Request(list_url,headers=headers)
+              with urllib.request.urlopen(req,timeout=60) as r: files=json.load(r)
+              (out/f'v{ver}_root_files.json').write_text(json.dumps(files,indent=2))
+              report[str(ver)]={}
+              wanted=['performance_time_series.csv'] + (['PERFORMANCE_DOMAINS_K_Kr2.csv'] if ver==2 else [])
+              for name in wanted:
+                  hits=[x for x in files if x.get('filename')==name]
+                  if len(hits)!=1:
+                      report[str(ver)][name]={'target_count':len(hits)}; continue
+                  m=hits[0]; url=m['content_details']['download_url']
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'htfi-audit'}),timeout=60) as r: b=r.read()
+                  fn=f'v{ver}_{name}'
+                  (out/fn).write_bytes(b)
+                  report[str(ver)][name]={'id':m['id'],'metadata_sha256':m['content_details'].get('sha256_hash'),'downloaded_sha256':hashlib.sha256(b).hexdigest(),'size':len(b)}
+          (out/'consistency_metadata.json').write_text(json.dumps(report,indent=2))
           PY
-          FILEID=$(cat out/target_file_id.txt)
-          curl -L -sS --fail -H 'Accept: application/vnd.mendeley-public-dataset.1+json' -o out/target_file_metadata.json "https://data.mendeley.com/public-api/datasets/f4fj887y67/files/${FILEID}"
-          URL=$(cat out/target_download_url.txt)
-          curl -L -sS --fail --retry 3 -o out/performance_time_series_RAW.csv "$URL"
           python3 - <<'PY'
-          import csv,json,math
-          from pathlib import Path
-          raw=Path('out/performance_time_series_RAW.csv')
-          with raw.open(newline='',encoding='utf-8-sig') as f:
-              r=csv.reader(f); rows=list(r)
-          header=rows[0]; body=rows[1:]
-          assert len(body)==398, len(body)
-          assert header==['','Year','Data','Domain','Metric','Units'], header
-          assert all(len(x)==6 for x in body)
-          canonical=[x[1:] for x in body]
-          domains=sorted(set(x[2] for x in canonical))
-          assert len(domains)==30, len(domains)
-          for y,v,d,m,u in canonical:
-              int(float(y)); fv=float(v); assert math.isfinite(fv) and fv>0; assert d and m and u
-          with open('out/performance_time_series.csv','w',newline='',encoding='utf-8') as f:
-              w=csv.writer(f); w.writerow(['Year','Data','Domain','Metric','Units']); w.writerows(canonical)
-          idx=[]
-          for x in body:
-              try: idx.append(int(x[0]))
-              except: pass
-          counts={d:sum(1 for x in canonical if x[2]==d) for d in domains}
-          Path('out/domain_counts.json').write_text(json.dumps(counts,indent=2),encoding='utf-8')
-          Path('out/validation.json').write_text(json.dumps({'raw_rows':398,'raw_header':header,'export_index_semantics':'ignored_nondata_field','index_integer_count':len(idx),'index_unique_count':len(set(idx)),'canonical_columns':['Year','Data','Domain','Metric','Units'],'domains':30,'all_year_data_parseable_positive':True},indent=2),encoding='utf-8')
-          print('VALIDATED raw=398 canonical=398 domains=30')
+          import csv,json,pathlib,hashlib
+          out=pathlib.Path('out'); summary={}
+          for ver in (1,2):
+              p=out/f'v{ver}_performance_time_series.csv'
+              with p.open(newline='',encoding='utf-8-sig') as f: rows=list(csv.reader(f))
+              body=rows[1:]; domains=sorted(set(x[3] for x in body))
+              summary[f'v{ver}']={'rows':len(body),'domains':len(domains),'domain_names':domains,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+          kp=out/'v2_PERFORMANCE_DOMAINS_K_Kr2.csv'
+          with kp.open(newline='',encoding='utf-8-sig') as f: kr=list(csv.reader(f))
+          summary['v2_K_table']={'data_rows':len(kr)-1,'header':kr[0],'sha256':hashlib.sha256(kp.read_bytes()).hexdigest()}
+          (out/'consistency_summary.json').write_text(json.dumps(summary,indent=2))
           PY
           sha256sum out/* > out/SHA256SUMS.txt
-          ls -lh out > out/LISTING.txt
-      - name: Upload raw target artifact
+      - name: Upload consistency artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: htfi-performance-time-series-raw
+          name: htfi-mendeley-version-consistency
           path: out/
           retention-days: 1
