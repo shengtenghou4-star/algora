@@ -1,4 +1,4 @@
-name: HTFI Mendeley frontend probe
+name: HTFI Mendeley raw file bridge
 
 on:
   pull_request:
@@ -8,55 +8,55 @@ permissions:
   contents: read
 
 jobs:
-  probe-frontend:
+  fetch-target:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - name: Fetch dataset page and JS bundles
+      - name: Fetch root file list and target raw CSV
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          curl -L -sS --fail -o out/page.html https://data.mendeley.com/datasets/f4fj887y67/2
+          LIST='https://data.mendeley.com/public-api/datasets/f4fj887y67/files?folder_id=root&version=2'
+          curl -L -sS --fail -H 'Accept: application/vnd.mendeley-public-dataset.1+json' -o out/root_files.json "$LIST"
           python3 - <<'PY'
           from pathlib import Path
-          import re, subprocess, urllib.parse, json
-          html=Path('out/page.html').read_text(errors='ignore')
-          srcs=re.findall(r'<script[^>]+src=["\']([^"\']+)',html)
-          urls=[]
-          for s in srcs:
-              u=urllib.parse.urljoin('https://data.mendeley.com/datasets/f4fj887y67/2',s)
-              if 'mendeley' in u or u.startswith('https://data.mendeley.com'):
-                  urls.append(u)
-          Path('out/script_urls.json').write_text(json.dumps(urls,indent=2))
-          for i,u in enumerate(urls):
-              p=f'out/script_{i:02d}.js'
-              subprocess.run(['curl','-L','-sS','--fail','-o',p,u],check=False)
+          import json,sys
+          x=json.loads(Path('out/root_files.json').read_text())
+          if not isinstance(x,list):
+              raise SystemExit(f'expected list, got {type(x)}: {str(x)[:500]}')
+          targets=[r for r in x if r.get('filename')=='performance_time_series.csv']
+          Path('out/root_file_summary.json').write_text(json.dumps([{'id':r.get('id'),'filename':r.get('filename'),'status':r.get('status'),'folder_id':r.get('folder_id'),'content_details':r.get('content_details')} for r in x],indent=2),encoding='utf-8')
+          if len(targets)!=1:
+              raise SystemExit(f'target count={len(targets)}; names={[r.get("filename") for r in x]}')
+          r=targets[0]
+          Path('out/target_metadata.json').write_text(json.dumps(r,indent=2),encoding='utf-8')
+          Path('out/target_file_id.txt').write_text(str(r['id']))
+          url=r.get('content_details',{}).get('download_url')
+          if not url: raise SystemExit('target has no content_details.download_url')
+          Path('out/target_download_url.txt').write_text(url)
           PY
-
+          FILEID=$(cat out/target_file_id.txt)
+          curl -L -sS --fail -H 'Accept: application/vnd.mendeley-public-dataset.1+json' \
+            -o out/target_file_metadata.json \
+            "https://data.mendeley.com/public-api/datasets/f4fj887y67/files/${FILEID}"
+          URL=$(cat out/target_download_url.txt)
+          curl -L -sS --fail --retry 3 -o out/performance_time_series.csv "$URL"
           python3 - <<'PY'
-          from pathlib import Path
-          import re,json
-          pats=['filesLoading','file_downloaded','public-files','api.data.mendeley','dataset-files','/files','downloadUrl','download_url','fileId','file_id','digitalcommonsdata','oauth','bearer','authorization']
-          hits=[]
-          for p in sorted(Path('out').glob('script_*.js')):
-              s=p.read_text(errors='ignore')
-              rec={'file':p.name,'bytes':p.stat().st_size,'hits':{}}
-              for pat in pats:
-                  locs=[m.start() for m in re.finditer(re.escape(pat),s,re.I)]
-                  if locs:
-                      rec['hits'][pat]=[s[max(0,x-1200):x+2200] for x in locs[:12]]
-              urls=sorted(set(re.findall(r'https?://[^\"\'<>\\s)]+',s)))
-              urls=[u for u in urls if any(k in u.lower() for k in ['mendeley','digitalcommons','dataset','file'])]
-              if urls: rec['candidate_urls']=urls[:500]
-              if rec['hits'] or rec.get('candidate_urls'): hits.append(rec)
-          Path('out/frontend_hits.json').write_text(json.dumps(hits,indent=2),encoding='utf-8')
+          import pandas as pd
+          p='out/performance_time_series.csv'
+          d=pd.read_csv(p)
+          assert len(d)==398, len(d)
+          assert d['Domain'].nunique()==30, d['Domain'].nunique()
+          assert list(d.columns)==['Year','Data','Domain','Metric','Units'], list(d.columns)
+          d.groupby('Domain').size().rename('n').to_csv('out/domain_counts.csv')
+          print('VALIDATED',len(d),d.Domain.nunique(),list(d.columns))
           PY
           sha256sum out/* > out/SHA256SUMS.txt
           ls -lh out > out/LISTING.txt
-      - name: Upload frontend probe
+      - name: Upload raw target artifact
         uses: actions/upload-artifact@v4
         with:
-          name: htfi-mendeley-frontend-probe
+          name: htfi-performance-time-series-raw
           path: out/
           retention-days: 1
