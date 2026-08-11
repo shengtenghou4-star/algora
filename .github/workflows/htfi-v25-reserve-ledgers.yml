@@ -1,0 +1,42 @@
+name: HTFI v25 reserve source ledgers
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: FD21, url: 'https://github.com/FFmpeg/FFmpeg.git' }
+          - { id: FD23, url: 'https://gitlab.freedesktop.org/mesa/mesa.git' }
+          - { id: FD24, url: 'https://github.com/torvalds/linux.git' }
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch source tag metadata only
+        shell: bash
+        env:
+          ID: ${{ matrix.id }}
+          URL: ${{ matrix.url }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          git clone --bare --filter=blob:none --quiet "$URL" repo.git
+          git -C repo.git for-each-ref --sort=creatordate \
+            --format='%(refname:strip=2)|%(creatordate:iso8601-strict)|%(objecttype)|%(objectname)|%(*objectname)' refs/tags \
+            > "out/${ID}_tags.txt"
+          printf '%s\n' "$URL" > "out/${ID}_source_url.txt"
+          sha256sum out/* > "out/${ID}_SHA256SUMS.txt"
+      - name: Upload ledger
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-v25-ledger-${{ matrix.id }}
+          path: out/
+          retention-days: 1
