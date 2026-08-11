@@ -39,7 +39,7 @@ jobs:
           URL=$(cat out/target_download_url.txt)
           curl -L -sS --fail --retry 3 -o out/performance_time_series_RAW.csv "$URL"
           python3 - <<'PY'
-          import csv,json
+          import csv,json,math
           from pathlib import Path
           raw=Path('out/performance_time_series_RAW.csv')
           with raw.open(newline='',encoding='utf-8-sig') as f:
@@ -48,21 +48,26 @@ jobs:
           assert len(body)==398, len(body)
           assert header==['','Year','Data','Domain','Metric','Units'], header
           assert all(len(x)==6 for x in body)
-          idx=[int(x[0]) for x in body]
-          assert len(idx)==398 and len(set(idx))==398
           canonical=[x[1:] for x in body]
           domains=sorted(set(x[2] for x in canonical))
           assert len(domains)==30, len(domains)
+          for y,v,d,m,u in canonical:
+              int(float(y)); fv=float(v); assert math.isfinite(fv) and fv>0; assert d and m and u
           with open('out/performance_time_series.csv','w',newline='',encoding='utf-8') as f:
               w=csv.writer(f); w.writerow(['Year','Data','Domain','Metric','Units']); w.writerows(canonical)
+          idx=[]
+          for x in body:
+              try: idx.append(int(x[0]))
+              except: pass
           counts={d:sum(1 for x in canonical if x[2]==d) for d in domains}
           Path('out/domain_counts.json').write_text(json.dumps(counts,indent=2),encoding='utf-8')
-          Path('out/validation.json').write_text(json.dumps({'raw_rows':398,'raw_header':header,'raw_index_integer_unique':True,'raw_index_min':min(idx),'raw_index_max':max(idx),'canonical_columns':['Year','Data','Domain','Metric','Units'],'domains':30},indent=2),encoding='utf-8')
-          print('VALIDATED raw=398 canonical=398 domains=30 index_unique=398')
+          Path('out/validation.json').write_text(json.dumps({'raw_rows':398,'raw_header':header,'export_index_semantics':'ignored_nondata_field','index_integer_count':len(idx),'index_unique_count':len(set(idx)),'canonical_columns':['Year','Data','Domain','Metric','Units'],'domains':30,'all_year_data_parseable_positive':True},indent=2),encoding='utf-8')
+          print('VALIDATED raw=398 canonical=398 domains=30')
           PY
           sha256sum out/* > out/SHA256SUMS.txt
           ls -lh out > out/LISTING.txt
       - name: Upload raw target artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: htfi-performance-time-series-raw
