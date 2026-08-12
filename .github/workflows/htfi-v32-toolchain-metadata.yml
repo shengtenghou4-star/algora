@@ -1,0 +1,36 @@
+name: HTFI v32 toolchain metadata
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ['4.9','7','9','12']
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Pull official GCC image and record immutable metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ matrix.tag }}'
+          mkdir -p out
+          docker pull "gcc:${tag}"
+          docker image inspect "gcc:${tag}" > out/image_inspect.json
+          docker image inspect --format='{{index .RepoDigests 0}}' "gcc:${tag}" > out/repo_digest.txt
+          docker run --rm "gcc:${tag}" sh -lc 'gcc --version; echo ---; ldd --version 2>&1 | head -1; echo ---; uname -m' > out/toolchain.txt
+          printf '%s\n' "$tag" > out/tag.txt
+          sha256sum out/* > out/SHA256SUMS.txt
+      - name: Upload metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-v32-gcc-${{ matrix.tag }}-metadata
+          path: out/
+          retention-days: 1
