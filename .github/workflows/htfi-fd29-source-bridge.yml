@@ -16,9 +16,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out/opencv
+          mkdir -p out
           git clone -q --filter=blob:none --no-checkout https://github.com/opencv/opencv.git opencv
-          cat > out/releases.tsv <<'EOF'
+          cat > releases.tsv <<'EOF'
           2012	2.4.3.2
           2013	2.4.8
           2014	2.4.10.1
@@ -27,19 +27,33 @@ jobs:
           2020	4.5.1
           2025	4.13.0
           EOF
-          printf 'year\ttag\tcommit\tarchive_sha256\n' > out/source_manifest.tsv
           while IFS=$'\t' read -r year tag; do
+            d="out/$year"; mkdir -p "$d"
             git -C opencv fetch -q --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}"
             commit="$(git -C opencv rev-list -n 1 "$tag")"
-            dst="out/opencv/opencv-${year}-${tag}.tar.gz"
+            dst="$d/opencv-${year}-${tag}.tar.gz"
             git -C opencv archive --format=tar.gz -o "../$dst" "$tag"
             h="$(sha256sum "$dst"|awk '{print $1}')"
-            printf '%s\t%s\t%s\t%s\n' "$year" "$tag" "$commit" "$h" >> out/source_manifest.tsv
-          done < out/releases.tsv
-          find out -type f -print0 | sort -z | xargs -0 sha256sum > out/ALL_SHA256SUMS.txt
-      - name: Upload source artifact
+            printf 'year\ttag\tcommit\tarchive_sha256\n%s\t%s\t%s\t%s\n' "$year" "$tag" "$commit" "$h" > "$d/source_manifest.tsv"
+          done < releases.tsv
+      - name: Upload 2012
         uses: actions/upload-artifact@v4
-        with:
-          name: htfi-fd29-opencv-sources
-          path: out/
-          retention-days: 1
+        with: {name: htfi-fd29-opencv-2012, path: out/2012/, retention-days: 1}
+      - name: Upload 2013
+        uses: actions/upload-artifact@v4
+        with: {name: htfi-fd29-opencv-2013, path: out/2013/, retention-days: 1}
+      - name: Upload 2014
+        uses: actions/upload-artifact@v4
+        with: {name: htfi-fd29-opencv-2014, path: out/2014/, retention-days: 1}
+      - name: Upload 2015
+        uses: actions/upload-artifact@v4
+        with: {name: htfi-fd29-opencv-2015, path: out/2015/, retention-days: 1}
+      - name: Upload 2018
+        uses: actions/upload-artifact@v4
+        with: {name: htfi-fd29-opencv-2018, path: out/2018/, retention-days: 1}
+      - name: Upload 2020
+        uses: actions/upload-artifact@v4
+        with: {name: htfi-fd29-opencv-2020, path: out/2020/, retention-days: 1}
+      - name: Upload 2025
+        uses: actions/upload-artifact@v4
+        with: {name: htfi-fd29-opencv-2025, path: out/2025/, retention-days: 1}
