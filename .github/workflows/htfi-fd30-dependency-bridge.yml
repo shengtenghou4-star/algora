@@ -1,0 +1,38 @@
+name: HTFI FD30 dependency bridge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch frozen OpenSSL and libuv sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          git clone -q --filter=blob:none --no-checkout https://github.com/openssl/openssl.git openssl
+          git -C openssl fetch -q --depth 1 origin refs/tags/OpenSSL_1_1_1w:refs/tags/OpenSSL_1_1_1w
+          oc="$(git -C openssl rev-list -n 1 OpenSSL_1_1_1w)"
+          git -C openssl archive --format=tar.gz -o ../out/openssl-1.1.1w.tar.gz OpenSSL_1_1_1w
+
+          git clone -q --filter=blob:none --no-checkout https://github.com/libuv/libuv.git libuv
+          git -C libuv fetch -q --depth 1 origin refs/tags/v1.48.0:refs/tags/v1.48.0
+          uc="$(git -C libuv rev-list -n 1 v1.48.0)"
+          git -C libuv archive --format=tar.gz -o ../out/libuv-1.48.0.tar.gz v1.48.0
+
+          printf 'dependency\ttag\tcommit\tsha256\n' > out/dependency_manifest.tsv
+          printf 'openssl\tOpenSSL_1_1_1w\t%s\t%s\n' "$oc" "$(sha256sum out/openssl-1.1.1w.tar.gz|awk '{print $1}')" >> out/dependency_manifest.tsv
+          printf 'libuv\tv1.48.0\t%s\t%s\n' "$uc" "$(sha256sum out/libuv-1.48.0.tar.gz|awk '{print $1}')" >> out/dependency_manifest.tsv
+      - name: Upload dependencies
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-fd30-frozen-dependencies
+          path: out/
+          retention-days: 1
