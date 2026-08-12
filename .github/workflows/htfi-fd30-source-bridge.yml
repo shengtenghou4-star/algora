@@ -32,7 +32,8 @@ jobs:
             url="https://downloads.isc.org/isc/bind9/${version}/bind-${version}.tar.gz"
             dst="$d/bind-${version}.tar.gz"
             curl -L --fail --retry 4 --connect-timeout 20 --max-time 300 -o "$dst" "$url"
-            tar -tzf "$dst" | head -1 > "$d/root.txt"
+            tar -tzf "$dst" > "$d/tar_listing.txt"
+            sed -n '1p' "$d/tar_listing.txt" > "$d/root.txt"
             h="$(sha256sum "$dst"|awk '{print $1}')"
             printf '%s\t%s\t%s\t%s\n' "$year" "$version" "$url" "$h" >> out/source_manifest.tsv
           done < releases.tsv
