@@ -1,0 +1,45 @@
+name: HTFI FD29 source bridge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fetch exact OpenCV tag archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/opencv
+          git clone -q --filter=blob:none --no-checkout https://github.com/opencv/opencv.git opencv
+          cat > out/releases.tsv <<'EOF'
+          2012	2.4.3.2
+          2013	2.4.8
+          2014	2.4.10.1
+          2015	3.1.0
+          2018	4.0.1
+          2020	4.5.1
+          2025	4.13.0
+          EOF
+          printf 'year\ttag\tcommit\tarchive_sha256\n' > out/source_manifest.tsv
+          while IFS=$'\t' read -r year tag; do
+            git -C opencv fetch -q --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}"
+            commit="$(git -C opencv rev-list -n 1 "$tag")"
+            dst="out/opencv/opencv-${year}-${tag}.tar.gz"
+            git -C opencv archive --format=tar.gz -o "../$dst" "$tag"
+            h="$(sha256sum "$dst"|awk '{print $1}')"
+            printf '%s\t%s\t%s\t%s\n' "$year" "$tag" "$commit" "$h" >> out/source_manifest.tsv
+          done < out/releases.tsv
+          find out -type f -print0 | sort -z | xargs -0 sha256sum > out/ALL_SHA256SUMS.txt
+      - name: Upload source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-fd29-opencv-sources
+          path: out/
+          retention-days: 1
