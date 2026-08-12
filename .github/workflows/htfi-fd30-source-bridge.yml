@@ -1,0 +1,45 @@
+name: HTFI FD30 BIND source bridge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fetch exact official ISC BIND releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cat > releases.tsv <<'EOF'
+          2012	9.9.2-P1
+          2013	9.9.4-P1
+          2014	9.9.6-P1
+          2015	9.9.8-P2
+          2018	9.12.3-P1
+          2020	9.16.10
+          2025	9.18.43
+          EOF
+          printf 'year\tversion\turl\tarchive_sha256\n' > out/source_manifest.tsv
+          while IFS=$'\t' read -r year version; do
+            d="out/$year"; mkdir -p "$d"
+            url="https://downloads.isc.org/isc/bind9/${version}/bind-${version}.tar.gz"
+            dst="$d/bind-${version}.tar.gz"
+            curl -L --fail --retry 4 --connect-timeout 20 --max-time 300 -o "$dst" "$url"
+            tar -tzf "$dst" | head -1 > "$d/root.txt"
+            h="$(sha256sum "$dst"|awk '{print $1}')"
+            printf '%s\t%s\t%s\t%s\n' "$year" "$version" "$url" "$h" >> out/source_manifest.tsv
+          done < releases.tsv
+          find out -type f -print0 | sort -z | xargs -0 sha256sum > out/ALL_SHA256SUMS.txt
+      - name: Upload source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-fd30-bind-sources
+          path: out/
+          retention-days: 1
