@@ -26,13 +26,22 @@ jobs:
           2020	3.34.0	3340000
           2025	3.51.1	3510100
           EOF
-          printf 'year\tversion\tcode\tarchive_sha256\tsqlite3c_sha256\tsqlite3h_sha256\theader_version\n' > out/source_manifest.tsv
+          printf 'year\tversion\tcode\tchosen_url\tarchive_sha256\tsqlite3c_sha256\tsqlite3h_sha256\theader_version\n' > out/source_manifest.tsv
           while IFS=$'\t' read -r year version code; do
             d="out/sources/${year}_${version}"
             mkdir -p "$d"
-            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
-            echo "$url" > "$d/url.txt"
-            curl -L --fail --retry 4 --connect-timeout 20 --max-time 180 -o "$d/archive.zip" "$url"
+            u1="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            u2="https://www.sqlite.org/sqlite-amalgamation-${code}.zip"
+            chosen=""
+            if curl -L --fail --retry 2 --connect-timeout 20 --max-time 180 -o "$d/archive.zip" "$u1"; then
+              chosen="$u1"
+            elif curl -L --fail --retry 2 --connect-timeout 20 --max-time 180 -o "$d/archive.zip" "$u2"; then
+              chosen="$u2"
+            else
+              echo "both official URLs failed for $year $version" >&2
+              exit 22
+            fi
+            echo "$chosen" > "$d/url.txt"
             unzip -q "$d/archive.zip" -d "$d/unpacked"
             srcdir="$(find "$d/unpacked" -mindepth 1 -maxdepth 1 -type d | head -n1)"
             test -n "$srcdir"
@@ -43,7 +52,7 @@ jobs:
             asha="$(sha256sum "$d/archive.zip" | awk '{print $1}')"
             csha="$(sha256sum "$d/sqlite3.c" | awk '{print $1}')"
             hsha="$(sha256sum "$d/sqlite3.h" | awk '{print $1}')"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$year" "$version" "$code" "$asha" "$csha" "$hsha" "$hv" >> out/source_manifest.tsv
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$year" "$version" "$code" "$chosen" "$asha" "$csha" "$hsha" "$hv" >> out/source_manifest.tsv
           done < out/releases.tsv
           find out -type f -print0 | sort -z | xargs -0 sha256sum > out/ALL_SHA256SUMS.txt
           du -sh out > out/SIZE.txt
