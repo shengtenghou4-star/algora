@@ -1,0 +1,30 @@
+name: HTFI v33 PCDB metadata bridge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-pcdb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch OWID Farmer-Lafond 66-tech package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          curl -L --fail --retry 4 --connect-timeout 20 --max-time 180 \
+            -A 'Our World In Data data fetch/1.0' \
+            -o out/farmer_lafond_66_full.zip \
+            'https://ourworldindata.org/grapher/costs-of-66-different-technologies-over-time.zip?csvType=full&useColumnShortNames=false&v=1'
+          sha256sum out/farmer_lafond_66_full.zip > out/SHA256SUMS.txt
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-v33-farmer-lafond-66
+          path: out/
+          retention-days: 1
