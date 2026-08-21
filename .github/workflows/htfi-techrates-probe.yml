@@ -1,0 +1,41 @@
+name: HTFI technologyrates portal probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch portal HTML and referenced local assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/assets
+          curl -L --fail --retry 3 --connect-timeout 20 --max-time 120 -D out/headers.txt -o out/index.html 'https://mitanalytics.technext.tools/'
+          python - <<'PY'
+          import re, urllib.parse, pathlib, subprocess
+          html=pathlib.Path('out/index.html').read_text(errors='ignore')
+          urls=[]
+          for u in re.findall(r'(?:src|href)=["\']([^"\']+)["\']', html):
+              if u.startswith('/') or u.startswith('http'):
+                  full=urllib.parse.urljoin('https://mitanalytics.technext.tools/',u)
+                  if urllib.parse.urlparse(full).netloc=='mitanalytics.technext.tools': urls.append(full)
+          pathlib.Path('out/asset_urls.txt').write_text('\n'.join(dict.fromkeys(urls)))
+          for i,u in enumerate(dict.fromkeys(urls)):
+              if any(x in urllib.parse.urlparse(u).path.lower() for x in ['.js','.css']):
+                  subprocess.run(['curl','-L','--fail','--max-time','60','-o',f'out/assets/{i:03d}',u],check=False)
+          PY
+          grep -RniE 'form|search|ajax|fetch\(|axios|api/|url:|action=|csrf|query' out/index.html out/assets > out/grep.txt || true
+          sha256sum out/index.html out/assets/* 2>/dev/null > out/SHA256SUMS.txt || true
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-techrates-probe
+          path: out/
+          retention-days: 1
