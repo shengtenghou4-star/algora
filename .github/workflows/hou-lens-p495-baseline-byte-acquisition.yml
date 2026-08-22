@@ -1,0 +1,238 @@
+name: HOU-LENS P4.9.5 encrypted baseline bytes
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/hou-lens-p495-baseline-byte-acquisition.yml
+      - .github/hou-lens-p495/p495_acquire_baseline_bytes.py
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  acquisition:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PAYLOAD_BRANCH: hou-lens-p495-baseline-payload
+      PAYLOAD_DIR: .github/hou-lens-p495-baseline-payload
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Generate ephemeral P4.9.5 runner certificate
+        run: |
+          set -euo pipefail
+          openssl req -x509 -newkey rsa:3072 -nodes -days 1 \
+            -subj '/CN=HOU-LENS-P4.9.5-baseline-byte-acquisition' \
+            -keyout /tmp/runner.key -out runner.crt >/dev/null 2>&1
+          python - <<'PY'
+          import hashlib,json,os,pathlib
+          raw=pathlib.Path('runner.crt').read_bytes()
+          receipt={
+            'schema_version':1,
+            'protocol':'HOU-LENS-P4.9.5-BASELINE-BYTE-CAMPAIGN',
+            'stage':'ephemeral_runner_handshake',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+            'executor_head_sha':os.environ['EXPECTED_HEAD_SHA'],
+            'certificate_sha256':hashlib.sha256(raw).hexdigest(),
+            'private_key_published':False,
+            'payload_released':False,
+            'soda_requests_sent':0,
+            'image_bytes_downloaded':0,
+            'scores_available':False,
+            'scores_computed':False,
+          }
+          pathlib.Path('handshake.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Upload encrypted-payload handshake
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p495-handshake-${{ github.run_id }}
+          path: |
+            runner.crt
+            handshake.json
+          retention-days: 2
+
+      - name: Install byte-audit runtime
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check requests==2.32.5 numpy==1.26.4 astropy==6.0.1
+
+      - name: Wait for exact encrypted P4.9.5 payload
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/private /tmp/result /tmp/encrypted-result
+          found=0
+          for attempt in $(seq 1 1800); do
+            git fetch -q origin "+refs/heads/$PAYLOAD_BRANCH:refs/remotes/origin/$PAYLOAD_BRANCH"
+            REF="refs/remotes/origin/$PAYLOAD_BRANCH"
+            if git show "$REF:$PAYLOAD_DIR/manifest.json" >/tmp/payload-manifest.json 2>/dev/null; then
+              if python - <<'PY'
+          import json,os
+          m=json.load(open('/tmp/payload-manifest.json'))
+          checks=[
+            str(m.get('run_id'))==os.environ['GITHUB_RUN_ID'],
+            str(m.get('run_attempt'))==os.environ['GITHUB_RUN_ATTEMPT'],
+            m.get('executor_head_sha')==os.environ['EXPECTED_HEAD_SHA'],
+            m.get('protocol')=='HOU-LENS-P4.9.5-ENCRYPTED-BASELINE-PAYLOAD',
+            m.get('object_count')==38,
+            m.get('logical_request_count')==190,
+            m.get('scores_available') is False,
+            m.get('future_validation_touched') is False,
+            m.get('unknown_dr5_only_targets_queried') is False,
+          ]
+          raise SystemExit(0 if all(checks) else 1)
+          PY
+              then found=1; break; fi
+            fi
+            sleep 10
+          done
+          test "$found" = 1
+
+          python - <<'PY'
+          import base64,hashlib,json,os,pathlib,subprocess
+          m=json.load(open('/tmp/payload-manifest.json'))
+          ref='refs/remotes/origin/'+os.environ['PAYLOAD_BRANCH']; prefix=os.environ['PAYLOAD_DIR']+'/'
+          actual=subprocess.check_output(['git','ls-tree','-r','--name-only',ref,'--',os.environ['PAYLOAD_DIR']],text=True).splitlines()
+          expected=[prefix+'manifest.json']+[prefix+p['file'] for p in m['parts']]
+          if sorted(actual)!=sorted(expected): raise SystemExit('unexpected encrypted payload file set')
+          assembled=bytearray()
+          for p in m['parts']:
+            raw=subprocess.check_output(['git','show',f"{ref}:{prefix}{p['file']}"])
+            if len(raw)!=int(p['bytes']) or hashlib.sha256(raw).hexdigest()!=p['sha256']:
+              raise SystemExit('encrypted payload part mismatch')
+            if subprocess.check_output(['git','hash-object','--stdin'],input=raw).decode().strip()!=p['git_blob']:
+              raise SystemExit('encrypted payload git blob mismatch')
+            assembled.extend(raw)
+          if len(assembled)!=int(m['base64_bytes']) or hashlib.sha256(assembled).hexdigest()!=m['base64_sha256']:
+            raise SystemExit('global encrypted base64 mismatch')
+          der=base64.b64decode(bytes(assembled),validate=True)
+          if len(der)!=int(m['cms_der_bytes']) or hashlib.sha256(der).hexdigest()!=m['cms_der_sha256']:
+            raise SystemExit('CMS DER mismatch')
+          pathlib.Path('/tmp/payload.der').write_bytes(der)
+          PY
+
+          openssl cms -decrypt -binary -inform DER -in /tmp/payload.der \
+            -recip runner.crt -inkey /tmp/runner.key -out /tmp/private-payload.tar.gz
+
+          python - <<'PY'
+          import hashlib,json,pathlib,tarfile
+          m=json.load(open('/tmp/payload-manifest.json')); raw=pathlib.Path('/tmp/private-payload.tar.gz').read_bytes()
+          if len(raw)!=int(m['payload_tar_bytes']) or hashlib.sha256(raw).hexdigest()!=m['payload_tar_sha256']:
+            raise SystemExit('decrypted private tar mismatch')
+          expected={'P495_TARGETS.csv','P495_ACQUISITION_LOCK.json','p495-result-recipient-cert.pem'}
+          with tarfile.open('/tmp/private-payload.tar.gz','r:gz') as tf:
+            members=tf.getmembers(); names={x.name for x in members}
+            if names!=expected: raise SystemExit(f'private payload fileset mismatch: {names}')
+            for member in members:
+              parts=pathlib.PurePosixPath(member.name).parts
+              if not member.isfile() or member.name.startswith('/') or '..' in parts: raise SystemExit('unsafe tar member')
+            tf.extractall('/tmp/private')
+          PY
+
+      - name: Verify private baseline lock before network access
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv,json,os,pathlib
+          root=pathlib.Path('/tmp/private'); lock=json.loads((root/'P495_ACQUISITION_LOCK.json').read_text())
+          targets=list(csv.DictReader((root/'P495_TARGETS.csv').open(newline='',encoding='utf-8')))
+          checks=[
+            lock.get('protocol')=='HOU-LENS-P4.9.5-BASELINE-BYTE-CAMPAIGN',
+            lock.get('object_count')==38,
+            lock.get('logical_request_count')==190,
+            lock.get('scores_available') is False,
+            lock.get('future_validation_touched') is False,
+            lock.get('unknown_dr5_only_targets_queried') is False,
+            lock.get('blind_search') is False,
+            str(lock.get('run_id'))==os.environ['GITHUB_RUN_ID'],
+            str(lock.get('run_attempt'))==os.environ['GITHUB_RUN_ATTEMPT'],
+            lock.get('executor_head_sha')==os.environ['EXPECTED_HEAD_SHA'],
+            len(targets)==38,
+            len({r['object_key'] for r in targets})==38,
+            sum(r['role']=='positive' for r in targets)==5,
+            sum(r['role']=='control' for r in targets)==33,
+          ]
+          if not all(checks): raise SystemExit('private lock/target verification failed')
+          pathlib.Path('/tmp/result/preaccess_verification.json').write_text(json.dumps({
+            'schema_version':1,'status':'PASS_PRIVATE_INPUT_BEFORE_NETWORK','run_id':os.environ['GITHUB_RUN_ID'],
+            'objects':38,'logical_requests':190,'scores_available':False,'soda_requests_sent':0,'image_bytes_downloaded':0,
+            'future_validation_touched':False,'unknown_dr5_only_targets_queried':False,'blind_search':False,
+          },indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Execute frozen 38-object baseline byte campaign
+        run: |
+          set -euo pipefail
+          set +e
+          python .github/hou-lens-p495/p495_acquire_baseline_bytes.py \
+            /tmp/private/P495_TARGETS.csv /tmp/private/P495_ACQUISITION_LOCK.json /tmp/result/acquisition \
+            >/tmp/result/executor-stdout.log 2>/tmp/result/executor-stderr.log
+          code=$?
+          set -e
+          printf '%s\n' "$code" >/tmp/result/executor-exit-code.txt
+
+      - name: Independently audit and encrypt private result
+        if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('/tmp/result'); acq=root/'acquisition'
+          code=int((root/'executor-exit-code.txt').read_text().strip()) if (root/'executor-exit-code.txt').exists() else 190
+          audit={'schema_version':1,'protocol':'HOU-LENS-P4.9.5-BASELINE-BYTE-CAMPAIGN','executor_exit_code':code,'scores_available':False,'scores_computed':False,'future_validation_touched':False,'unknown_dr5_only_targets_queried':False,'blind_search':False}
+          sp=acq/'summary.json'; rp=acq/'request_receipts.jsonl'
+          if sp.exists() and rp.exists():
+            summary=json.loads(sp.read_text()); receipts=[json.loads(x) for x in rp.read_text().splitlines() if x]
+            if len(receipts)!=190 or len({x['request_key'] for x in receipts})!=190: raise SystemExit('receipt count/uniqueness mismatch')
+            success=[x for x in receipts if x.get('status')=='success']
+            for row in success:
+              p=acq/row['file']; raw=p.read_bytes()
+              if len(raw)!=int(row['bytes']) or hashlib.sha256(raw).hexdigest()!=row['sha256']: raise SystemExit('FITS byte/hash mismatch')
+            audit.update({'status':'PASS_INDEPENDENT_BYTE_AUDIT' if code==0 and len(success)==190 else 'TERMINAL_AUDITED_WITH_TECHNICAL_FAILURES','receipt_count':len(receipts),'success_count':len(success),'failure_count':190-len(success),'successful_fits_bytes':sum(int(x['bytes']) for x in success),'summary_sha256':hashlib.sha256(sp.read_bytes()).hexdigest(),'request_receipts_sha256':hashlib.sha256(rp.read_bytes()).hexdigest()})
+          else:
+            audit.update({'status':'TERMINAL_BEFORE_COMPLETE_RECEIPT_SET','receipt_count':0})
+          (root/'independent_audit.json').write_text(json.dumps(audit,indent=2,sort_keys=True)+'\n')
+          PY
+
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf /tmp/private-result.tar.gz -C /tmp/result .
+          openssl cms -encrypt -binary -aes-256-cbc -stream -outform DER \
+            -in /tmp/private-result.tar.gz -out /tmp/private-result.cms \
+            /tmp/private/p495-result-recipient-cert.pem
+          split -b 400M -d -a 3 /tmp/private-result.cms /tmp/encrypted-result/result-part-
+          python - <<'PY'
+          import hashlib,json,os,pathlib
+          root=pathlib.Path('/tmp/encrypted-result'); cms=pathlib.Path('/tmp/private-result.cms'); tar=pathlib.Path('/tmp/private-result.tar.gz')
+          parts=[]
+          for p in sorted(root.glob('result-part-*')):
+            raw=p.read_bytes(); parts.append({'file':p.name,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
+          manifest={'schema_version':1,'protocol':'HOU-LENS-P4.9.5-ENCRYPTED-PRIVATE-RESULT','run_id':os.environ['GITHUB_RUN_ID'],'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'executor_head_sha':os.environ['EXPECTED_HEAD_SHA'],'private_tar_bytes':tar.stat().st_size,'private_tar_sha256':hashlib.sha256(tar.read_bytes()).hexdigest(),'cms_der_bytes':cms.stat().st_size,'cms_der_sha256':hashlib.sha256(cms.read_bytes()).hexdigest(),'part_count':len(parts),'parts':parts,'public_plaintext_scientific_result':False,'scores_publicly_exposed':False}
+          (root/'manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
+          PY
+          cp /tmp/result/executor-exit-code.txt /tmp/encrypted-result/executor-exit-code.txt
+          rm -rf /tmp/private /tmp/payload.der /tmp/private-payload.tar.gz /tmp/private-result.tar.gz /tmp/private-result.cms /tmp/runner.key /tmp/result
+
+      - name: Upload encrypted P4.9.5 private result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hou-lens-p495-encrypted-private-result-${{ github.run_id }}
+          path: /tmp/encrypted-result/*
+          retention-days: 3
+          compression-level: 0
+
+      - name: Enforce acquisition terminal status after encrypted return
+        if: always()
+        run: |
+          set -euo pipefail
+          test -f /tmp/encrypted-result/executor-exit-code.txt
+          test "$(cat /tmp/encrypted-result/executor-exit-code.txt)" = '0'
