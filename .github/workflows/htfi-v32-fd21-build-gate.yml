@@ -1,0 +1,149 @@
+name: HTFI v32 FD21 historical-toolchain build gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-fd21:
+    name: "FD21 ${{ matrix.year }} / ${{ matrix.tag }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - year: 2012
+            tag: n1.0.1
+            commit: 528700dd58abf654861bcfc32dd990bd0541baf5
+            source_sha256: 87cd7d9d74d58df25c4c2cc26766651bc8f18a8ac617629eed7433b1fcb71033
+            image: gcc@sha256:6356ef8b29cc3522527a85b6c58a28626744514bea87a10ff2bf67599a7474f5
+          - year: 2013
+            tag: n2.0.3
+            commit: b4552cc9b8c37410f754af5d34d24e7b8a9b4b0e
+            source_sha256: e3cd77121697dbcb079060041199a01d37007b780a3eb2bdf046026bd36f0338
+            image: gcc@sha256:6356ef8b29cc3522527a85b6c58a28626744514bea87a10ff2bf67599a7474f5
+          - year: 2014
+            tag: n2.1.7
+            commit: 41802887eb647bee21238e0a575a7c4bbf954b86
+            source_sha256: 8889f86e445c6fcc65d8aa9f15c468d36f38d7257539ce70ed4b9be22e25e820
+            image: gcc@sha256:6356ef8b29cc3522527a85b6c58a28626744514bea87a10ff2bf67599a7474f5
+          - year: 2015
+            tag: n2.6.6
+            commit: d6ce1cb14077891f3f6ac86cfd243835c92eb374
+            source_sha256: 8e96c0b5b8e07a6f0d5862222707b2ded31e101529e0f8ea86e1a51b9cfe6b6b
+            image: gcc@sha256:6356ef8b29cc3522527a85b6c58a28626744514bea87a10ff2bf67599a7474f5
+          - year: 2018
+            tag: n3.3.9
+            commit: 9cba90e5ef03f741074d45e3e68741d26c6c1741
+            source_sha256: 82a5990600aec63551ac5e63cdce00beea6609ed10c40bd415cd7e6f3349c0d1
+            image: gcc@sha256:1938a2199146f37d7c5b697a66d4379b75e3cd6ca5e08380c6803ab25e0ba9a4
+          - year: 2020
+            tag: n4.3.1
+            commit: 6b6b9e593dd4d3aaf75f48d40a13ef03bdef9fdb
+            source_sha256: cac2f6189c1a4638ba92422ef73a3fd1bd21a36b0d1626aec44fd85b042e94e5
+            image: gcc@sha256:a9aba821155db99d0800920f27bf3a94ead6f9dedf330a2e2ce38da73f5370e3
+          - year: 2025
+            tag: n5.1.8
+            commit: 9bc0bcce7a03701025d7002271ddc2ce4f351908
+            source_sha256: da6f805bb72449cf26e955572044aa1dffca39d2d6e370175926ac8f196e9e83
+            image: gcc@sha256:1dc2dc4d3fe9e181b0472342a7af1885f3d0f757fb241f815b617f470770f660
+
+    steps:
+      - name: Fetch exact frozen FFmpeg tag and verify identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf work
+          mkdir -p work/repo work/src work/bundle
+          git -C work/repo init -q
+          git -C work/repo remote add origin https://github.com/FFmpeg/FFmpeg.git
+          git -C work/repo fetch -q --depth 1 origin "refs/tags/${{ matrix.tag }}:refs/tags/${{ matrix.tag }}"
+          got_commit="$(git -C work/repo rev-list -n 1 "${{ matrix.tag }}")"
+          test "$got_commit" = "${{ matrix.commit }}"
+          git -C work/repo archive --format=tar.gz -o ../source.tar.gz "${{ matrix.tag }}"
+          echo "${{ matrix.source_sha256 }}  work/source.tar.gz" | sha256sum -c -
+          tar -xzf work/source.tar.gz -C work/src
+          {
+            echo "year=${{ matrix.year }}"
+            echo "tag=${{ matrix.tag }}"
+            echo "commit=${{ matrix.commit }}"
+            echo "source_sha256=${{ matrix.source_sha256 }}"
+            echo "image=${{ matrix.image }}"
+          } > work/bundle/frozen_identity.txt
+
+      - name: Pull immutable historical GCC image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "${{ matrix.image }}"
+          docker image inspect "${{ matrix.image }}" > work/bundle/docker_image_inspect.json
+
+      - name: Build only under frozen historical toolchain
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm             -v "$PWD/work:/work"             -w /work/src             "${{ matrix.image }}"             bash -lc '
+              set -euo pipefail
+              {
+                gcc --version
+                echo ---
+                ldd --version 2>&1 | head -n 1
+                echo ---
+                uname -m
+              } > /work/bundle/toolchain.txt
+
+              ./configure --disable-doc --disable-network --disable-asm --disable-debug --extra-cflags="-O2 -DNDEBUG"                 > /work/bundle/configure.stdout.txt                 2> /work/bundle/configure.stderr.txt
+
+              make -j5 ffmpeg                 > /work/bundle/make.stdout.txt                 2> /work/bundle/make.stderr.txt
+
+              test -x ./ffmpeg
+              cp ./ffmpeg /work/bundle/ffmpeg
+              sha256sum ./ffmpeg > /work/bundle/ffmpeg.sha256
+              ./ffmpeg -version > /work/bundle/ffmpeg-version.txt 2>&1
+              ldd ./ffmpeg > /work/bundle/ldd.txt 2>&1
+              readelf -lW ./ffmpeg > /work/bundle/readelf-program-headers.txt 2>&1
+
+              {
+                awk '"'"'/=> \/[^ ]+/ {print $3} /^\// {print $1}'"'"' /work/bundle/ldd.txt
+                readelf -lW ./ffmpeg | awk '"'"'/Requesting program interpreter/ {gsub(/[][]/,"",$4); print $4}'"'"'
+              } | grep '"'"'^/'"'"' | sort -u > /work/bundle/runtime_paths.txt
+
+              while IFS= read -r p; do
+                test -e "$p"
+                mkdir -p "/work/bundle/root$(dirname "$p")"
+                cp -L "$p" "/work/bundle/root$p"
+              done < /work/bundle/runtime_paths.txt
+
+              find /work/bundle -type f -print0 | sort -z | xargs -0 sha256sum > /work/bundle/ALL_SHA256SUMS.txt
+            '
+
+      - name: Record gate result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/bundle
+          {
+            echo "domain=FD21"
+            echo "year=${{ matrix.year }}"
+            echo "tag=${{ matrix.tag }}"
+            echo "build_step_outcome=${{ steps.build.outcome }}"
+            echo "performance_executed=false"
+            echo "protocol=v32-historical-toolchain-build-only"
+          } > work/bundle/BUILD_GATE_STATUS.txt
+          find work/bundle -maxdepth 2 -type f -printf '%P\n' | sort > work/bundle/FILE_LIST.txt
+          sha256sum work/bundle/BUILD_GATE_STATUS.txt work/bundle/FILE_LIST.txt > work/bundle/TRANSPORT_HASHES.txt
+
+      - name: Upload build-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-v32-fd21-build-${{ matrix.year }}
+          path: work/bundle/
+          retention-days: 1
