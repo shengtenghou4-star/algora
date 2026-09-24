@@ -1,0 +1,141 @@
+name: HTFI v32 FD45 blinded source census
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  metadata-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Query Crossref metadata only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python - <<'PY'
+          import hashlib, json, re, time, urllib.parse, urllib.request, urllib.error
+          from collections import defaultdict
+
+          years=[2012,2013,2014,2015,2018,2020,2025]
+          queries=[
+              '"ASTM D3985" oxygen film',
+              '"ISO 15105-2" oxygen film',
+              '"oxygen transmission rate" polymer film'
+          ]
+          oxygen_terms=["oxygen","o2"]
+          transport_terms=["transmission","permeability","permeation","barrier"]
+          material_terms=["film","packag","polymer","membrane"]
+          max_candidates_per_year=15
+
+          def redact_title(s):
+              toks=re.split(r"(\s+)",s)
+              kept=[]
+              for tok in toks:
+                  if any(ch.isdigit() for ch in tok): continue
+                  if re.search(r"[%/×·^=<>~±µμ]",tok): continue
+                  kept.append(tok)
+              return re.sub(r"\s+"," ","".join(kept)).strip()
+
+          def fetch(url):
+              req=urllib.request.Request(url,headers={"User-Agent":"HTFI-source-census/1.0 (metadata-only research)"})
+              attempts=[]
+              for attempt in range(1,6):
+                  try:
+                      with urllib.request.urlopen(req,timeout=90) as resp:
+                          payload=json.load(resp)
+                      attempts.append({"attempt":attempt,"status":"success"})
+                      return payload,attempts
+                  except urllib.error.HTTPError as e:
+                      attempts.append({"attempt":attempt,"status":f"http_{e.code}"})
+                      if e.code!=429 or attempt==5: raise
+                      time.sleep(5*attempt)
+
+          records={}
+          receipts=[]
+          accepted=defaultdict(int)
+          for year in years:
+              for q in queries:
+                  params={
+                      "query.bibliographic":q,
+                      "filter":f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31",
+                      "select":"DOI,title,published,container-title,type,URL",
+                      "rows":"1000"
+                  }
+                  payload,attempts=fetch("https://api.crossref.org/works?"+urllib.parse.urlencode(params))
+                  items=payload.get("message",{}).get("items",[])
+                  receipts.append({"year":year,"query":q,"items_returned":len(items),"attempts":attempts})
+                  for it in items:
+                      doi=(it.get("DOI") or "").strip()
+                      titles=it.get("title") or []
+                      title=titles[0].strip() if titles else ""
+                      if not doi or not title: continue
+                      tl=title.lower()
+                      topical_signal=(
+                          any(t in tl for t in oxygen_terms)
+                          and any(t in tl for t in transport_terms)
+                          and any(t in tl for t in material_terms)
+                      )
+                      if not topical_signal: continue
+                      key=doi.lower()
+                      if key in records or accepted[year]>=max_candidates_per_year: continue
+                      records[key]={
+                          "year":year,
+                          "doi":doi,
+                          "venue":" | ".join(it.get("container-title") or []).strip(),
+                          "type":it.get("type"),
+                          "title_sha256":hashlib.sha256(title.encode()).hexdigest(),
+                          "title_redacted":redact_title(title),
+                          "raw_title_retained":False,
+                          "abstract_requested":False,
+                          "performance_value_extracted":False
+                      }
+                      accepted[year]+=1
+                  time.sleep(2)
+
+          recs=sorted(records.values(),key=lambda r:(r["year"],r["doi"]))
+          counts=defaultdict(int)
+          for r in recs: counts[str(r["year"])]+=1
+          out={
+              "schema":"HTFI-v32-FD45-blinded-source-census-stage1-v2",
+              "candidate":"FD45",
+              "frozen_metric":"FPM=1/(OTR_cm3_m2_day_atm*thickness_um)",
+              "frozen_source_rule":"Peer-reviewed or manufacturer technical datasheets; transparent flexible polymer films; ASTM D3985 or ISO 15105-2 at 23C and 0% RH; OTR and thickness from same sample; exclude metal foil and opaque metallized structures.",
+              "stage":"METADATA_DISCOVERY_ONLY",
+              "required_years":years,
+              "queries_frozen_before_first_request":queries,
+              "topical_title_rule_frozen_before_rerun":{
+                  "oxygen_terms":oxygen_terms,
+                  "transport_terms":transport_terms,
+                  "material_terms":material_terms,
+                  "logic":"at least one term from every group"
+              },
+              "erratum_reason":"v1 topical filter was too broad and admitted oxygen-related thin films unrelated to oxygen-barrier packaging; v2 tightens semantic metadata relevance without using performance values.",
+              "max_candidates_per_year":max_candidates_per_year,
+              "abstracts_requested":False,
+              "raw_titles_retained":False,
+              "performance_values_intentionally_extracted":False,
+              "protocol_eligibility_decided":False,
+              "records":recs,
+              "year_counts":dict(counts),
+              "metadata_candidate_continuity":all(counts[str(y)]>0 for y in years),
+              "next_stage_if_pass":"Blind source-content boolean check for D3985/ISO15105-2, 23C, 0%RH, transparent flexible polymer film, OTR+thickness same sample, and metallized/foil exclusions; never emit OTR or thickness values."
+          }
+          json.dump(out,open("out/fd45_stage1_blinded_metadata_census.json","w"),indent=2)
+          json.dump(receipts,open("out/request_receipts.json","w"),indent=2)
+          with open("out/SHA256SUMS.txt","w") as f:
+              for p in ["out/fd45_stage1_blinded_metadata_census.json","out/request_receipts.json"]:
+                  f.write(hashlib.sha256(open(p,"rb").read()).hexdigest()+"  "+p.split("/")[-1]+"\n")
+          print("FD45 stage-1 metadata census complete; no abstracts or performance values emitted")
+          PY
+
+      - name: Upload blinded census
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-v32-fd45-stage1-blinded-source-census
+          path: out/
+          retention-days: 1
