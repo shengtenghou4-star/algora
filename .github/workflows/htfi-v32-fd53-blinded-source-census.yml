@@ -25,11 +25,20 @@ jobs:
 
           # Frozen before first query. These terms are source-discovery terms only;
           # they do not alter the preregistered eligibility rule.
+          # Retrieval-completeness erratum v2, frozen before rerun.
+          # The first pass wrongly required the standard/four-ball phrase in the title,
+          # even though standards normally appear only in Methods.
           queries = [
+              '"ASTM D4172" "Condition B"',
               '"ASTM D4172" lubricant',
               '"ASTM D4172" oil',
-              '"four-ball wear" lubricant'
+              '"ASTM D4172" grease'
           ]
+          subject_title_terms = [
+              "lubric", "oil", "grease", "wear", "tribolog", "friction",
+              "antiwear", "anti-wear"
+          ]
+          max_candidates_per_year = 15
 
           def redact_title(s):
               # Do not emit numerical result-like tokens from titles.
@@ -63,6 +72,7 @@ jobs:
 
           records = {}
           receipts = []
+          accepted_per_year = defaultdict(int)
           for year in years:
               for q in queries:
                   params = {
@@ -88,15 +98,14 @@ jobs:
                       if not doi or not title:
                           continue
                       tl = title.lower()
-                      # Metadata-only relevance screen. Do not infer Condition B eligibility here.
-                      discovery_signal = (
-                          "d4172" in tl or
-                          ("four" in tl and "ball" in tl and "wear" in tl) or
-                          ("four-ball" in tl and "wear" in tl)
-                      )
-                      if not discovery_signal:
+                      # Metadata-only topical screen. The standard itself is NOT required in the title.
+                      if not any(term in tl for term in subject_title_terms):
                           continue
                       key = doi.lower()
+                      if key in records:
+                          continue
+                      if accepted_per_year[year] >= max_candidates_per_year:
+                          continue
                       records[key] = {
                           "year":year,
                           "doi":doi,
@@ -110,6 +119,7 @@ jobs:
                           "abstract_requested":False,
                           "performance_value_extracted":False
                       }
+                      accepted_per_year[year] += 1
                   time.sleep(2)
 
           recs = sorted(records.values(), key=lambda r:(r["year"],r["doi"]))
@@ -118,13 +128,16 @@ jobs:
               counts[str(r["year"])] += 1
 
           out = {
-              "schema":"HTFI-v32-FD53-blinded-source-census-stage1-v1",
+              "schema":"HTFI-v32-FD53-blinded-source-census-stage1-v2",
               "candidate":"FD53",
               "frozen_metric":"FPM=1/four_ball_wear_scar_mm",
               "frozen_source_rule":"Manufacturer technical data or peer-reviewed measurements; ASTM D4172 Condition B exactly (40 kg, 75C, 1200 rpm, 60 min); finished lubricants only; no alternate load/time/temperature conditions.",
-              "stage":"METADATA_DISCOVERY_ONLY",
+              "stage":"METADATA_DISCOVERY_ONLY_RETRIEVAL_COMPLETENESS_ERRATUM_V2",
               "required_years":years,
               "queries_frozen_before_first_request":queries,
+              "topical_title_terms_frozen_before_rerun":subject_title_terms,
+              "max_candidates_per_year":max_candidates_per_year,
+              "erratum_reason":"v1 incorrectly required D4172/four-ball wording in the title; v2 uses title only for lubricant/tribology topical relevance and defers exact protocol verification to the blind content check.",
               "abstracts_requested":False,
               "raw_titles_retained":False,
               "performance_values_intentionally_extracted":False,
@@ -231,11 +244,22 @@ jobs:
                   return None
               return t.read_text(errors="ignore")
 
-          def candidate_urls(doi):
+          def candidate_sources(doi):
               urls=[]
-              # OpenAlex is used only to discover lawful OA/landing locations.
+              abstract_text=""
+              # OpenAlex is used only to discover lawful OA/landing locations and
+              # transient abstract text for protocol booleans. Raw text is never emitted.
               try:
-                  oa=http_json("https://api.openalex.org/works/https://doi.org/"+urllib.parse.quote(doi,safe=""))
+                  oa=http_json("https://api.openalex.org/works/https://doi.org/"+urllib.parse.quote(doi,safe="/"))
+                  inv=oa.get("abstract_inverted_index") or {}
+                  if inv:
+                      maxpos=max((p for ps in inv.values() for p in ps), default=-1)
+                      words=[""]*(maxpos+1)
+                      for word,positions in inv.items():
+                          for pos in positions:
+                              if 0 <= pos < len(words):
+                                  words[pos]=word
+                      abstract_text=" ".join(words)
                   for loc in [oa.get("best_oa_location"), oa.get("primary_location")]:
                       if loc:
                           for k in ["pdf_url","landing_page_url"]:
@@ -250,14 +274,15 @@ jobs:
                   pass
               u="https://doi.org/"+doi
               if u not in urls: urls.append(u)
-              return urls[:8]
+              return urls[:3], abstract_text
 
           out_records=[]
           for idx,r in enumerate(records):
               doi=r["doi"]
-              combined=""
-              access=[]
-              for j,u in enumerate(candidate_urls(doi)):
+              urls, abstract_text = candidate_sources(doi)
+              combined=abstract_text
+              access=[{"source_index":"openalex_abstract","status":"transient_present" if abstract_text else "absent"}]
+              for j,u in enumerate(urls):
                   try:
                       data,ctype,final,status=fetch_bytes(u)
                       if data is None:
@@ -291,6 +316,8 @@ jobs:
                   "stage2_candidate_signal":bool(exact_protocol and finished_signal),
                   "source_attempts":access,
                   "raw_source_text_retained":False,
+              "raw_abstract_text_retained":False,
+              "transient_openalex_abstract_used_for_protocol_booleans":True,
                   "performance_value_extracted":False
               })
               # Raw source text exists only transiently in this process variable.
@@ -308,7 +335,7 @@ jobs:
               }
 
           out={
-              "schema":"HTFI-v32-FD53-blinded-source-census-stage2-v1",
+              "schema":"HTFI-v32-FD53-blinded-source-census-stage2-v2",
               "candidate":"FD53",
               "parent_stage1_sha256":hashlib.sha256(open("stage1/fd53_stage1_blinded_metadata_census.json","rb").read()).hexdigest(),
               "stage":"BLIND_PROTOCOL_AND_CLASS_BOOLEAN_CHECK",
