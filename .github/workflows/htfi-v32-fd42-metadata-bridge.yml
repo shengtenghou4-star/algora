@@ -1,0 +1,143 @@
+name: HTFI v32 FD42 blinded metadata bridge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Query Crossref metadata only and redact numeric title tokens
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python - <<'PY'
+          import hashlib, json, re, time, urllib.parse, urllib.request
+          from collections import defaultdict
+
+          years = [2012, 2013, 2014, 2015, 2018, 2020, 2025]
+          queries = [
+              "LDPC decoder", "BCH decoder", "ECC decoder",
+              "error correcting decoder", "error-correction decoder",
+              "polar decoder", "turbo decoder"
+          ]
+          venue_terms = [
+              "solid-state circuits conference",
+              "solid state circuits conference",
+              "journal of solid-state circuits",
+              "journal of solid state circuits",
+              "transactions on circuits and systems i",
+              "transactions on circuits and systems ii",
+              "symposium on vlsi circuits",
+              "symposium on vlsi technology and circuits",
+              "vlsi symposium"
+          ]
+          ecc_terms = ["ldpc", "bch", "ecc", "error correcting", "error-correction", "polar", "turbo"]
+          impl_terms = ["asic", "cmos", "chip", "silicon", "integrated circuit", "processor", "decoder"]
+
+          def redact_title(s):
+              toks = re.split(r"(\s+)", s)
+              kept = []
+              for tok in toks:
+                  if any(ch.isdigit() for ch in tok):
+                      continue
+                  if re.search(r"[%/×x·^=<>~±µμ]", tok):
+                      continue
+                  kept.append(tok)
+              s2 = "".join(kept)
+              s2 = re.sub(r"\s+", " ", s2).strip()
+              return s2
+
+          seen = {}
+          request_receipts = []
+          for year in years:
+              for q in queries:
+                  params = {
+                      "query.title": q,
+                      "filter": f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31",
+                      "select": "DOI,title,published,container-title,type",
+                      "rows": "200"
+                  }
+                  url = "https://api.crossref.org/works?" + urllib.parse.urlencode(params)
+                  req = urllib.request.Request(
+                      url,
+                      headers={"User-Agent":"HTFI-source-census/1.0 (metadata-only research)"}
+                  )
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      payload = json.load(resp)
+                  request_receipts.append({
+                      "year": year, "query": q,
+                      "status": payload.get("status"),
+                      "message_type": payload.get("message-type"),
+                      "items_returned": len(payload.get("message",{}).get("items",[]))
+                  })
+                  for it in payload.get("message",{}).get("items",[]):
+                      doi = (it.get("DOI") or "").strip()
+                      titles = it.get("title") or []
+                      title = titles[0].strip() if titles else ""
+                      containers = it.get("container-title") or []
+                      venue = " | ".join(containers).strip()
+                      if not doi or not title or not venue:
+                          continue
+                      tl, vl = title.lower(), venue.lower()
+                      if not any(v in vl for v in venue_terms):
+                          continue
+                      if "decoder" not in tl or not any(k in tl for k in ecc_terms):
+                          continue
+                      key = doi.lower()
+                      seen[key] = {
+                          "year": year,
+                          "doi": doi,
+                          "venue": venue,
+                          "title_sha256": hashlib.sha256(title.encode("utf-8")).hexdigest(),
+                          "title_redacted": redact_title(title),
+                          "implementation_signal": any(k in tl for k in impl_terms),
+                          "raw_title_retained": False,
+                          "abstract_requested": False
+                      }
+                  time.sleep(0.25)
+
+          records = sorted(seen.values(), key=lambda x:(x["year"],x["doi"]))
+          by_year = defaultdict(lambda: {"records":0,"implementation_signal_records":0})
+          for r in records:
+              by_year[str(r["year"])]["records"] += 1
+              by_year[str(r["year"])]["implementation_signal_records"] += int(r["implementation_signal"])
+
+          out = {
+              "schema":"HTFI-v32-FD42-blinded-metadata-census-v1",
+              "candidate":"FD42",
+              "performance_values_intentionally_extracted":False,
+              "abstracts_requested":False,
+              "raw_titles_retained":False,
+              "required_years":years,
+              "frozen_venue_family":["ISSCC","VLSI Symposium","IEEE JSSC","IEEE TCAS-I/II"],
+              "query_terms_frozen_for_this_bridge":queries,
+              "redaction_rule":"drop every title token containing a digit or numeric/performance punctuation before artifact output; raw title exists only transiently in process memory and is never logged or uploaded",
+              "records":records,
+              "year_counts":dict(by_year),
+              "continuity_metadata_only":all(by_year[str(y)]["records"] > 0 for y in years),
+              "continuity_with_implementation_signal_only":all(by_year[str(y)]["implementation_signal_records"] > 0 for y in years)
+          }
+          with open("out/fd42_blinded_metadata_census.json","w",encoding="utf-8") as f:
+              json.dump(out,f,indent=2,ensure_ascii=False)
+          with open("out/request_receipts.json","w",encoding="utf-8") as f:
+              json.dump(request_receipts,f,indent=2,ensure_ascii=False)
+          with open("out/SHA256SUMS.txt","w",encoding="utf-8") as f:
+              for p in ["out/fd42_blinded_metadata_census.json","out/request_receipts.json"]:
+                  b=open(p,"rb").read()
+                  f.write(hashlib.sha256(b).hexdigest()+"  "+p.split("/")[-1]+"\n")
+          print("metadata-only census complete; raw titles and abstracts were not uploaded")
+          PY
+
+      - name: Upload blinded census
+        uses: actions/upload-artifact@v4
+        with:
+          name: htfi-v32-fd42-blinded-metadata-census
+          path: out/
+          retention-days: 1
