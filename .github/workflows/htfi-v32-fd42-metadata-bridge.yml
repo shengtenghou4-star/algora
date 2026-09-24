@@ -23,19 +23,21 @@ jobs:
 
           years = [2012, 2013, 2014, 2015, 2018, 2020, 2025]
           query = "decoder"
-          venue_terms = [
-              "solid-state circuits conference",
-              "solid state circuits conference",
-              "journal of solid-state circuits",
-              "journal of solid state circuits",
-              "transactions on circuits and systems i",
-              "transactions on circuits and systems ii",
-              "symposium on vlsi circuits",
-              "symposium on vlsi technology and circuits",
-              "vlsi symposium"
-          ]
+          def venue_allowed(vl):
+              if "asian" in vl and ("solid-state circuits conference" in vl or "solid state circuits conference" in vl):
+                  return False
+              return any(x in vl for x in [
+                  "ieee international solid-state circuits conference",
+                  "ieee international solid state circuits conference",
+                  "ieee journal of solid-state circuits",
+                  "ieee journal of solid state circuits",
+                  "ieee transactions on circuits and systems i:",
+                  "ieee transactions on circuits and systems ii:",
+                  "symposium on vlsi circuits",
+                  "symposium on vlsi technology and circuits"
+              ])
           ecc_terms = ["ldpc", "bch", "ecc", "error correcting", "error-correction", "polar", "turbo"]
-          impl_terms = ["asic", "cmos", "chip", "silicon", "integrated circuit", "processor", "decoder"]
+          impl_terms = ["asic", "cmos", "chip", "silicon", "integrated circuit", "vlsi", "hardware", "fabricat", "implementation"]
 
           def redact_title(s):
               toks = re.split(r"(\s+)", s)
@@ -93,7 +95,7 @@ jobs:
                   if not doi or not title or not venue:
                       continue
                   tl, vl = title.lower(), venue.lower()
-                  if not any(v in vl for v in venue_terms):
+                  if not venue_allowed(vl):
                       continue
                   if "decoder" not in tl or not any(k in tl for k in ecc_terms):
                       continue
@@ -104,17 +106,17 @@ jobs:
                       "venue": venue,
                       "title_sha256": hashlib.sha256(title.encode("utf-8")).hexdigest(),
                       "title_redacted": redact_title(title),
-                      "implementation_signal": any(k in tl for k in impl_terms),
+                      "hardware_title_signal": any(k in tl for k in impl_terms),
                       "raw_title_retained": False,
                       "abstract_requested": False
                   }
               time.sleep(2)
 
           records = sorted(seen.values(), key=lambda x:(x["year"],x["doi"]))
-          by_year = defaultdict(lambda: {"records":0,"implementation_signal_records":0})
+          by_year = defaultdict(lambda: {"records":0,"hardware_title_signal_records":0})
           for r in records:
               by_year[str(r["year"])]["records"] += 1
-              by_year[str(r["year"])]["implementation_signal_records"] += int(r["implementation_signal"])
+              by_year[str(r["year"])]["hardware_title_signal_records"] += int(r["hardware_title_signal"])
 
           out = {
               "schema":"HTFI-v32-FD42-blinded-metadata-census-v1",
@@ -129,7 +131,7 @@ jobs:
               "records":records,
               "year_counts":dict(by_year),
               "continuity_metadata_only":all(by_year[str(y)]["records"] > 0 for y in years),
-              "continuity_with_implementation_signal_only":all(by_year[str(y)]["implementation_signal_records"] > 0 for y in years)
+              "continuity_with_hardware_title_signal_only":all(by_year[str(y)]["hardware_title_signal_records"] > 0 for y in years)
           }
           with open("out/fd42_blinded_metadata_census.json","w",encoding="utf-8") as f:
               json.dump(out,f,indent=2,ensure_ascii=False)
