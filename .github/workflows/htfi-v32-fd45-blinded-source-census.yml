@@ -27,7 +27,9 @@ jobs:
               '"ISO 15105-2" oxygen film',
               '"oxygen transmission rate" polymer film'
           ]
-          topical_terms=["oxygen","barrier","film","packag","polymer","membrane"]
+          oxygen_terms=["oxygen","o2"]
+          transport_terms=["transmission","permeability","permeation","barrier"]
+          material_terms=["film","packag","polymer","membrane"]
           max_candidates_per_year=15
 
           def redact_title(s):
@@ -73,7 +75,12 @@ jobs:
                       title=titles[0].strip() if titles else ""
                       if not doi or not title: continue
                       tl=title.lower()
-                      if not any(t in tl for t in topical_terms): continue
+                      topical_signal=(
+                          any(t in tl for t in oxygen_terms)
+                          and any(t in tl for t in transport_terms)
+                          and any(t in tl for t in material_terms)
+                      )
+                      if not topical_signal: continue
                       key=doi.lower()
                       if key in records or accepted[year]>=max_candidates_per_year: continue
                       records[key]={
@@ -94,14 +101,20 @@ jobs:
           counts=defaultdict(int)
           for r in recs: counts[str(r["year"])]+=1
           out={
-              "schema":"HTFI-v32-FD45-blinded-source-census-stage1-v1",
+              "schema":"HTFI-v32-FD45-blinded-source-census-stage1-v2",
               "candidate":"FD45",
               "frozen_metric":"FPM=1/(OTR_cm3_m2_day_atm*thickness_um)",
               "frozen_source_rule":"Peer-reviewed or manufacturer technical datasheets; transparent flexible polymer films; ASTM D3985 or ISO 15105-2 at 23C and 0% RH; OTR and thickness from same sample; exclude metal foil and opaque metallized structures.",
               "stage":"METADATA_DISCOVERY_ONLY",
               "required_years":years,
               "queries_frozen_before_first_request":queries,
-              "topical_title_terms_frozen_before_first_request":topical_terms,
+              "topical_title_rule_frozen_before_rerun":{
+                  "oxygen_terms":oxygen_terms,
+                  "transport_terms":transport_terms,
+                  "material_terms":material_terms,
+                  "logic":"at least one term from every group"
+              },
+              "erratum_reason":"v1 topical filter was too broad and admitted oxygen-related thin films unrelated to oxygen-barrier packaging; v2 tightens semantic metadata relevance without using performance values.",
               "max_candidates_per_year":max_candidates_per_year,
               "abstracts_requested":False,
               "raw_titles_retained":False,
