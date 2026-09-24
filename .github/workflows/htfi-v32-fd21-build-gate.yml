@@ -93,7 +93,7 @@ jobs:
               {
                 gcc --version
                 echo ---
-                ldd --version > /tmp/htfi_ldd_version.txt 2>&1\n                sed -n '1p' /tmp/htfi_ldd_version.txt
+                ldd --version 2>&1
                 echo ---
                 uname -m
               } > /work/bundle/toolchain.txt
